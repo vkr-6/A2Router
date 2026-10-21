@@ -20,7 +20,8 @@ function Find-KitToolDirectory {
     param(
         [Parameter(Mandatory = $true)][string]$PackageDirectory,
         [Parameter(Mandatory = $true)][string]$ToolName,
-        [Parameter(Mandatory = $true)][string]$HostArchitecture
+        [Parameter(Mandatory = $true)][string]$HostArchitecture,
+        [string]$ToolSubdirectory = 'c\bin'
     )
     # These are host executables: an ARM64 driver target on an x64 runner
     # must still use x64 tools. Inf2Cat is shipped only as x86 in this kit.
@@ -31,16 +32,29 @@ function Find-KitToolDirectory {
         'X86'   { @('x86') }
         default { throw "Unsupported build host architecture: $HostArchitecture" }
     }
-    $candidates = @(Get-ChildItem "$PackageDirectory\c\bin" -Filter $ToolName -File -Recurse -ErrorAction Stop)
+    $candidates = @(Get-ChildItem "$PackageDirectory\$ToolSubdirectory" -Filter $ToolName -File -Recurse -ErrorAction Stop)
     foreach ($folder in $hostFolders) {
         $tool = $candidates | Where-Object { $_.Directory.Name -ieq $folder } | Sort-Object FullName | Select-Object -First 1
         if ($tool) { return $tool.Directory.FullName }
     }
-    throw "Cannot find a host-compatible $ToolName in $PackageDirectory\c\bin"
+    throw "Cannot find a host-compatible $ToolName in $PackageDirectory\$ToolSubdirectory"
 }
+function Find-KitMSBuild {
+    param([Parameter(Mandatory = $true)][string]$MSBuildPath)
+    $directory = Split-Path -Parent $MSBuildPath
+    if ((Split-Path -Leaf $directory) -ieq 'amd64' -and (Test-Path -LiteralPath $MSBuildPath -PathType Leaf)) {
+        return $MSBuildPath
+    }
+    $candidate = Join-Path $directory 'amd64\MSBuild.exe'
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    throw 'This NuGet WDK requires x64 MSBuild. Use setup-msbuild with msbuild-architecture: x64, or a VS 2022 x64 developer shell.'
+}
+$msbuildPath = (Get-Command msbuild.exe -ErrorAction Stop).Source
 $toolProperties = @()
 $originalPath = $env:PATH
 if ($UseNuGet) {
+    $msbuildPath = Find-KitMSBuild $msbuildPath
+    Write-Host "MSBuild executable (x64): $msbuildPath"
     if (!(Get-Command nuget.exe -ErrorAction SilentlyContinue)) { throw 'Install NuGet CLI or use NuGet/setup-nuget in GitHub Actions' }
     if (!$NuGetPackageRoot) { $NuGetPackageRoot = "$root\build\windows-driver\packages" }
     New-Item -ItemType Directory -Force $NuGetPackageRoot | Out-Null
@@ -58,11 +72,25 @@ if ($UseNuGet) {
     $stampInfDirectory = Find-KitToolDirectory $wdkPackage 'stampinf.exe' $hostArchitecture
     $inf2CatDirectory = Find-KitToolDirectory $wdkPackage 'Inf2Cat.exe' $hostArchitecture
     $signToolDirectory = Find-KitToolDirectory $sdkPackage 'signtool.exe' $hostArchitecture
-    $toolDirectories = @($stampInfDirectory, $inf2CatDirectory, $signToolDirectory) | Select-Object -Unique
-    $toolProperties = @("/p:StampInfToolPath=$stampInfDirectory", "/p:Inf2CatToolPath=$inf2CatDirectory")
+    # PackageVerifier is an in-process native DLL; x86 MSBuild cannot load
+    # the 64-bit native verifier shipped by this WDK. Keep validation enabled.
+    $infVerifDirectory = Find-KitToolDirectory $wdkPackage 'InfVerif.dll' 'AMD64' 'c\build'
+    $apiValidatorDirectory = Find-KitToolDirectory $wdkPackage 'ApiValidator.exe' 'AMD64'
+    $apiExtractorDirectory = Find-KitToolDirectory $wdkPackage 'AitStatic.exe' 'AMD64'
+    $toolDirectories = @($stampInfDirectory, $inf2CatDirectory, $signToolDirectory, $apiValidatorDirectory) | Select-Object -Unique
+    $toolProperties = @(
+        "/p:StampInfToolPath=$stampInfDirectory",
+        "/p:Inf2CatToolPath=$inf2CatDirectory",
+        '/p:PreferredToolArchitecture=x64',
+        '/p:ApiValidator_Arch=x64',
+        '/p:ApiExtractor_Arch=x64'
+    )
     Write-Host "StampInf tool directory: $stampInfDirectory"
     Write-Host "Inf2Cat tool directory: $inf2CatDirectory"
     Write-Host "SignTool tool directory: $signToolDirectory"
+    Write-Host "InfVerif native DLL directory (x64): $infVerifDirectory"
+    Write-Host "ApiValidator tool directory (x64): $apiValidatorDirectory"
+    Write-Host "API extractor directory (x64): $apiExtractorDirectory"
     # MSBuild discovers this file for all projects below the task-owned source copy.
     $xml = [System.Xml.XmlDocument]::new()
     $project = $xml.CreateElement('Project')
@@ -88,7 +116,7 @@ if ($CertificateThumbprint) {
 Push-Location $work
 try {
     if ($UseNuGet) { $env:PATH = ($toolDirectories -join [IO.Path]::PathSeparator) + [IO.Path]::PathSeparator + $originalPath }
-    & msbuild.exe SimpleAudioSample.sln /m "/p:Configuration=$Configuration" "/p:Platform=$Platform" @properties
+    & $msbuildPath SimpleAudioSample.sln /m "/p:Configuration=$Configuration" "/p:Platform=$Platform" @properties
     if ($LASTEXITCODE) { throw 'WDK driver build failed' }
     $package = "$root\build\windows-driver\package"
     New-Item -ItemType Directory -Force $package | Out-Null

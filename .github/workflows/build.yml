@@ -84,6 +84,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
       - uses: NuGet/setup-nuget@v2
       - name: Build with matching WDK and SDK NuGet packages
         shell: pwsh
