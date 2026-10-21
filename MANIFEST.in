@@ -1,0 +1,7 @@
+include CMakeLists.txt README.md THIRD_PARTY_NOTICES.md build.bat build_gui.bat
+recursive-include src *.cpp *.h
+recursive-include drivers *.cpp *.h *.vcxproj *.VcxProj *.Filters *.sln *.inx *.rc *.txt *.md
+recursive-include tools *.py *.ps1 *.bat *.yml *.txt
+recursive-include tests *.py *.cpp
+recursive-include docs *.md
+recursive-include .github/workflows *.yml

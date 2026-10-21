@@ -1,0 +1,30 @@
+A2Router — Advanced Audio Router (Windows x64)
+
+Launch a2router.exe for the GUI, or run a2router-cli.exe diagnostics for status.
+The packaged application includes Python/Qt and the WASAPI bridge. Routing runs
+without elevation. Creating/removing virtual devices requests UAC approval.
+
+Virtual outputs require a separately built, accepted signed driver package.
+If supplied, place A2RouterAudio.inf, A2RouterAudio.sys and A2RouterAudio.cat in
+driver/ beside the EXEs, preserving their signed contents. Otherwise the
+virtual-device controls remain disabled. The included source driver supports
+stereo, 48 kHz, 16-bit PCM only. The driver and new delay-control path are
+UNTESTED. A CI build is not playback or driver-installation verification.
+
+Synchronization offers additional per-route software delay after rebuilding
+the current native bridge. Applying delay restarts all outputs of that source.
+Native drift compensation is automatic. Acoustic alignment is unmeasured.
+
+Use Application > Exit controller to quit. Windows audio stops on exit;
+closing the window hides/minimizes it. Configuration lives in
+%APPDATA%\a2router. Microphone monitoring requires feedback confirmation.
+
+Checksums: SHA256SUMS.txt. Runtime versions: build-info.json.
+License notices: licenses/ and THIRD_PARTY_NOTICES.md.
+Any smoke reports cover read-only startup/discovery, not audio playback.
+No routes are started or drivers installed by the packaged smoke check.
+
+Credits: Windows engine from vkr-6/MultiRoute, originally
+FulminataXII/MultiRoute. Driver adapted from Microsoft SimpleAudioSample.
+A2Router additions developed with OpenAI Codex under the project owner's
+direction. See the source README and THIRD_PARTY_NOTICES.md for details.

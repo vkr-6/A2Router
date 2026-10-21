@@ -57,6 +57,11 @@ struct OutputRequest {
 struct EngineConfig {
     std::vector<OutputRequest> outputs;
 
+    // Empty preserves the original default-render loopback behavior. Explicit
+    // endpoints let independent engines capture inputs or non-default outputs.
+    std::wstring capture_endpoint_id;
+    bool capture_from_input = false;
+
     double   cushion_ms          = 50.0;   // baseline FIFO depth before playback starts
     double   control_range_ms    = 50.0;   // normalisation range for the drift controller
     uint32_t control_period_ms   = 250;    // drift controller tick
@@ -82,6 +87,9 @@ struct EngineConfig {
     // controls — a GUI settings toggle needs no other engine change.
     bool isolate_device_faults = false;
 
+    // Legacy frontends keep relative normalization. The Python bridge uses
+    // nonnegative absolute additional delays so single-output delay also works.
+    bool normalize_output_delays = true;
     DriftControlParams drift;
 };
 

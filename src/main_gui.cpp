@@ -786,9 +786,9 @@ int main(int, char**) {
 
     WNDCLASSEXW wc = {sizeof(wc),      CS_CLASSDC, WndProc, 0L,   0L,
                       GetModuleHandle(nullptr), nullptr,   nullptr, nullptr, nullptr,
-                      L"MultiMuxGui",  nullptr};
+                      L"a2routerGui",  nullptr};
     ::RegisterClassExW(&wc);
-    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"MultiMux", WS_OVERLAPPEDWINDOW, 100, 100,
+    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"A2Router - Advanced Audio Router", WS_OVERLAPPEDWINDOW, 100, 100,
                                (int)(1000 * main_scale), (int)(700 * main_scale), nullptr,
                                nullptr, wc.hInstance, nullptr);
 
@@ -870,7 +870,7 @@ int main(int, char**) {
 
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(io.DisplaySize);
-        ImGui::Begin("MultiMux", nullptr,
+        ImGui::Begin("A2Router", nullptr,
                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
                          ImGuiWindowFlags_NoBringToFrontOnFocus);

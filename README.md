@@ -1,149 +1,168 @@
-# MultiRoute (alias MultiMux)
+# A2Router — Advanced Audio Router
 
-> [!NOTE]
-> Henceforth the project is referred to as MultiMux.
+A compact desktop application for routing audio from multiple sources to multiple outputs. The interface uses Python and Qt Widgets; audio transport runs in PipeWire on Linux and the native C++ WASAPI engine on Windows.
 
-Play your Windows audio through several output devices at once, in sync, with separate delay and volume for each one.
+**Built on [vkr-6/MultiRoute](https://github.com/vkr-6/MultiRoute), originally [FulminataXII/MultiRoute](https://github.com/FulminataXII/MultiRoute). Developed with OpenAI Codex under the project owner's direction.** Original engine authorship and Microsoft driver credits are detailed below.
 
-Windows only lets you use one output device at a time, so if you want the same audio on your headphones and a Bluetooth speaker together, you're stuck. MultiMux takes whatever is already playing on your default device and sends a copy to any other outputs you pick, then keeps them lined up with each other.
+## Features and current status
 
-Written in C++17 on top of WASAPI, with a Dear ImGui frontend.
+- Discover inputs, outputs and output monitors, with reported active formats and channel layouts.
+- Create, enable, disable and remove concurrent device-level routes; support fan-out and multiple sources per destination.
+- Save and restore versioned JSON configurations and profiles, retaining unavailable-device definitions.
+- Linux: real PipeWire virtual outputs through `pipewire-pulse`, with mono, stereo, 5.1 and 7.1 layouts; owned-resource cleanup and reconnection support.
+- Windows: reuse MultiRoute's WASAPI engine for input capture and output loopbacks, with native drift compensation and telemetry.
+- Windows source additions: render-only virtual audio driver and UAC device manager; persisted additional route delay on the Synchronization page.
 
----
+**Windows virtual-device creation and the new delay-control path are UNTESTED.** Driver creation needs an accepted signed package; building a portable EXE does not install or sign a driver. The included driver exposes only stereo, 48 kHz, 16-bit PCM. Windows audio signal transport and physical-device/acoustic synchronization remain unverified. Linux virtual-graph PCM transport was verified in earlier isolated-server tests; this does not establish physical-hardware playback coverage. See [verification scope](docs/verification.md).
 
-## What it does
+## Build with GitHub Actions
 
-- **Several devices at once** — any number of active output endpoints, all fed from the same capture.
-- **Clock sync** — no two device clocks run at exactly the same speed, so one gradually gets ahead of the others. Each device has a control loop watching how far its buffer has drifted from target and nudging its sample rate to compensate.
-- **Per-device delay** — one output can be delayed than the rest which helps when something like a Bluetooth speaker lags behind wired headphones. Changeable while audio is playing.
-- **Per-device volume** — separate levels, also changeable mid-playback.
-- **Live telemetry** — buffer fill, applied clock rate, controller error and fault counts, per device.
-- **Experiment mode** — a named session gets recorded to a log file: the settings you picked plus the telemetry over time, across as many steps as you want. It's to help you compare runs afterwards instead of tuning just by ear.
+Push this source tree to your repository. The [A2Router build workflow](.github/workflows/build.yml) runs on pushes and pull requests and can also be started from **Actions → A2Router build → Run workflow**.
 
----
+| Job | Output / checks |
+|---|---|
+| Windows x64 portable application | Builds the native engine/helper, runs native and Python checks, packages GUI and CLI EXEs, and performs clearly labelled simulated offscreen startup checks |
+| Linux | Python lint/format checks, Python and native tests, isolated real PipeWire integration |
+| Optional Windows driver | Manual run with **build_driver** enabled; builds an **unsigned** WDK driver package using pinned matching NuGet SDK/WDK packages |
 
-## How it fits together
+After a successful run, download from the run's **Artifacts** section:
 
-```mermaid
-flowchart TD
-    UI["Frontend (GUI or CLI)"]
-    SUP["Supervisor thread<br/>owns every COM object<br/>start / stop / fault watchdog"]
- 
-    UI -- "commands" --> SUP
-    SUP -- "telemetry snapshots + logs" --> UI
- 
-    CAP["Capture thread<br/>loopback from default device<br/><i>realtime</i>"]
-    SUP --> CAP
- 
-    RA["Render thread A<br/><i>realtime</i>"]
-    RB["Render thread B<br/><i>realtime</i>"]
-    SUP --> RA
-    SUP --> RB
- 
-    RINGA["SPSC ring buffer A"]
-    RINGB["SPSC ring buffer B"]
- 
-    CAP -- "produces" --> RINGA
-    CAP -- "produces" --> RINGB
-    RINGA -- "consumes" --> RA
-    RINGB -- "consumes" --> RB
- 
-    CTLA["Control thread A<br/>drift correction"]
-    CTLB["Control thread B<br/>drift correction"]
-    RINGA -. "fill level" .-> CTLA
-    RINGB -. "fill level" .-> CTLB
-    CTLA -. "sample rate" .-> RA
-    CTLB -. "sample rate" .-> RB
- 
-    linkStyle 2,3,4,5,6,7,8,9,10,11,12 interpolate linear
+- **A2Router-windows-x64**: portable GUI/CLI, checksums, runtime notices and build reports. Launch `a2router.exe` after extracting.
+- **A2Router-windows-x64-zip**: the same portable application in a distributable ZIP.
+- **A2Router-windows-native**: WASAPI DLL, device manager, native CLI and diagnostic tools.
+- **A2Router-driver-x64-UNSIGNED**: optional driver INF/SYS/CAT and license. It is separate from the application artifact and cannot load on ordinary production Windows without accepted signing.
+
+Hosted Windows runners use the simulated backend for packaged GUI checks and load the actual DLL to verify its ABI. Endpoint-dependent tests are skipped there; local non-headless builds can run endpoint discovery checks. Hosted runners do not prove real speaker playback, microphone capture quality or acoustic synchronization. The workflow does not install drivers, enable test signing, change audio defaults, or publish a release. The updated workflow has not been dispatched during source preparation.
+
+When using a new GitHub repository, point your existing remote at it before pushing:
+
+```bash
+git remote set-url origin https://github.com/YOUR_ACCOUNT/A2Router.git
+git add .
+git diff --cached --stat
+git commit -m "Add A2Router application and build workflows"
+git push -u origin HEAD
 ```
 
-The audio path and the control path don't share anything that can block them. Audio threads will never take a lock or allocate; the control and UI side do both freely.
+Use your actual repository URL. Do not commit generated dependencies, VM images, certificates or build outputs; these are ignored. Local `prompt.md` and `progress.md` continuation notes are retained on disk but excluded from Git and source distributions.
 
-### Files
+## Linux setup
 
-```
-src/
-  AudioEngine.h/.cpp        Engine API and all the WASAPI code. The header has no Windows types in it.
-  AudioRingBuffer.h         Lock-free SPSC byte FIFO.
-  ClockDriftController.h    The drift correction math. 
-  Logging.h                 Lock-free MPMC queue plus a drain thread. Safe to call from audio threads.
-  ExperimentRecorder.h/.cpp Session recording. Only uses the public engine API.
-  main_gui.cpp              ImGui frontend.
-  main_cli.cpp              Console frontend.
-  HelpText.h                In-app glossary. Plain data, editable without changing the UI code.
-third_party/imgui/          Dear ImGui source (cloned separately, see below)
-build/                      Generated. build/MultiMuxGui.exe is the self-contained app.
+On a native Ubuntu/Debian PipeWire desktop:
+
+```bash
+sudo apt install python3-venv pipewire pipewire-pulse wireplumber pulseaudio-utils
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e '.[test]'
+python -m a2router diagnostics
+python -m a2router gui
 ```
 
----
+Run as your normal desktop user. `pactl info` must connect to the intended audio server. In **Virtual devices**, create a named output and select it in the source application's sound settings. In **Routing**, select that virtual output's monitor and a physical destination. Add another route for another output. Matching channel layouts are required; implicit surround downmixing is rejected. Microphone monitoring requires explicit feedback-risk confirmation.
 
-## Design
+PipeWire supplies transport, mixing and clock management. Adjustable delay is not currently exposed on Linux. See [Linux details](docs/linux.md).
 
-Almost everything here follows from two problems: device clocks drift apart from each other, and a render callback that misses its deadline turns into an audible dropout, so the audio threads can't be made to wait for anything.
+## Windows setup and local build
 
-**Buffers.** Each output gets its own SPSC ring buffer, with the capture thread writing and that device's render thread reading. I went with one buffer per device rather than one shared buffer with N readers, so a device that stalls only hurts itself and no output has to synchronise against another. Head and tail sit on separate cache lines, and they use acquire/release instead of `seq_cst`.
+Install Python 3.12 x64, Visual Studio 2022 with Desktop C++, a Windows SDK and CMake. From the project root:
 
-Only the consumer is allowed to move the read position, which mattered once I added live delay changes — shrinking a delay means throwing away audio that's already buffered. Instead of having the UI thread reach in and move the indices, the render thread does the discard itself when it notices an atomic request. The single-consumer rule then holds by construction and I don't have to remember it.
-
-**Logging.** I wanted real diagnostics out of the audio threads, and that rules out anything which allocates, locks, or formats a string. So audio threads push a fixed-size POD record — an event ID plus two integers — into a lock-free MPMC queue, and a drain thread turns those into text for the UI. A slow log window therefore can't stall audio. If the queue fills up, records get dropped and counted, so at least the drop is visible instead of silent.
-
-**Sync.** Each device has a non-realtime control thread running an EMA-smoothed proportional controller over its buffer fill error, driving `IAudioClockAdjustment::SetSampleRate`. There's a deadband so it ignores noise and a minimum step so it isn't calling into the OS constantly. For a while I had two hysteresis thresholds — 0.5 Hz inside the controller and 0.1 Hz in the caller — and the outer one could never actually fire, so there's one now.
-
-**Telemetry.** `stats()` used to take the same mutex the supervisor holds while tearing devices down, which meant the GUI could block mid-restart. Now the supervisor builds an immutable snapshot and swaps in a pointer to it atomically, so readers never block. Volume changes still take a short lock, since dragging a slider is a handful of calls a second rather than one every frame.
-
-**COM lifetimes.** WASAPI service objects care which thread acquires and releases them. `IAudioClient` and `IAudioClockAdjustment` therefore live on the supervisor thread, while the render and capture services are acquired and released inside the threads that use them. `start()` and `stop()` post a command to the supervisor and wait on it, so it doesn't matter which thread the UI calls them from.
-
-**Changing delay while it's playing.** Increasing a delay is easy, since you can feed in silence and let the buffer grow. Decreasing it isn't, because audio already sitting in the buffer can't be un-played. Draining it with clock rate alone works out to roughly 40 seconds for 100 ms at the default correction range, which is useless in practice. I did look at temporarily widening the correction limits instead, but even a 20x boost only gets that down to about 2 seconds, and `SetSampleRate` returns `E_INVALIDARG` past some undocumented range that varies by endpoint — not something I wanted to build on.
-
-What it does instead is split by size. Under 10 ms it just moves the controller's target and lets it walk there, which you don't hear. Anything larger mutes that one device, splices its buffer immediately, then unmutes — well under a second, and the other outputs keep playing throughout. Once the discontinuity is hidden behind a mute, there's no reason to converge gradually at all.
-
-Delay is capped by ring capacity, which gets fixed when playback starts. The cap is worked out per device and shown in the UI, and a request past it is refused with a reason rather than quietly clamped.
-
-**When things break.** Early on a render thread could die quietly while capture and the other devices carried on, so the only symptom was a slowly rising error count. Every fatal condition now routes through one function, and a config flag decides whether it takes the whole engine down — the default, because that's hardest to miss — or drops just the faulted device and lets the rest continue.
-
-The one that actually caught me out: WASAPI's event-driven loopback capture stops signalling when the source device goes completely silent. Pause everything for a minute and the capture thread sits there waiting forever. The wait is bounded now, so silence turns into polling instead of a hang, and the count of those timeouts shows up in the telemetry.
-
----
-
-## Getting it running
-
-You'll need Visual Studio 2022 Build Tools and the Windows 10 SDK.
-
-```
-git clone --depth 1 https://github.com/ocornut/imgui.git third_party\imgui
-build_gui.bat
+```powershell
+py -3.12 -m venv .venv
+.venv\Scripts\python -m pip install -e ".[test]"
+cmake -S . -B build -A x64
+cmake --build build --config Release
+.venv\Scripts\python -m a2router diagnostics
+.venv\Scripts\python -m a2router gui
 ```
 
-Run that from a **Developer Command Prompt for VS 2022** and you'll get `build\MultiMuxGui.exe`.
+The bridge is `build/a2router_wasapi.dll`; `A2ROUTER_WASAPI_DLL` overrides its path. To build portable EXEs from a Visual Studio developer shell:
 
-The executable is self-contained: ImGui is compiled in, the C runtime is linked statically, and DirectX and WASAPI ship with Windows. So the source, ImGui and the VC++ Redistributable aren't needed to run it.
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/windows/build-portable.ps1
+```
 
-`build.bat` builds the console version instead, and `build_gui.bat clean` deletes the build folder.
+Outputs are `dist/windows-x64/` and `dist/a2router-windows-x64.zip`. The script uses `%LOCALAPPDATA%\a2router-build` for temporary work, or the directory supplied with `-Workspace`. `-Headless` uses simulated packaged smoke checks, skips endpoint-dependent tests and omits native desktop startup; `-SkipTests` skips automated and packaged smoke checks. No Python installation is needed to run the packaged EXEs.
 
-From there:
+### Windows virtual outputs
 
-1. Tick the outputs you want, set a delay and starting volume for each, then hit **Confirm**.
-2. The live screen shows the telemetry, and delay and volume can both be changed from there while audio is playing.
-3. **Logs** shows engine events, filtered by severity.
-4. **Debug** asks for confirmation, then exposes the tuning parameters.
-5. **Experiment** records a tuning session into `experiments/`.
+The driver source and complete requirements are in [drivers/windows/README.md](drivers/windows/README.md). Build with a matching WDK/SDK installation, or restore pinned NuGet kits from a developer shell with NuGet CLI:
 
-**Help** explains every term in the UI in plain language.
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/windows/build-driver.ps1 -UseNuGet
+```
 
-A few things that aren't obvious:
+The package is written to `build/windows-driver/package/`. **It is unsigned by default.** Production deployment requires Microsoft-accepted signing; development deployment needs a separately prepared target. The build scripts do not change boot/security settings or import certificates.
 
-- Your default output device is the one being captured, so it carries on playing by itself and can't also be a target. Its volume belongs to Windows rather than to this app.
-- If you want audio going only to non-default devices, make something like VB-Cable your Windows default and pick the real devices as outputs.
-- Loopback capture is shared-mode only, so an app holding an exclusive-mode stream can't be captured, and WASAPI blocks DRM-protected streams outright.
-- It captures from whichever device was default when you pressed Confirm, and won't follow later changes to the Windows default.
+With a valid signed package, the rebuilt native helper and bridge, launch the GUI and create a stereo output. Creation/removal requests UAC approval. `A2ROUTER_DRIVER_INF` can select another package location. For a portable app, put the valid package in `driver/` beside the EXE. Do not modify a signed INF. Other compatible applications can select the endpoint only after Windows successfully installs and activates it.
 
----
+### Windows synchronization
 
-## Limitations
+After rebuilding the bridge, select a route on **Synchronization**, set its additional software delay and apply. The setting is persisted; applying it briefly restarts all destinations of that source. Existing per-output drift compensation remains automatic. The page reports native buffering, rate adjustment and error telemetry. A fixed delay alone cannot remove hardware clock drift, and precise acoustic alignment requires measurement.
 
-- Currently, there's no recovery from unplugging a device — that output faults instead of reconnecting.
-- It doesn't follow Windows default-device changes while running.
-- Settings aren't saved between runs.
-- The console frontend predates the volume and live-delay features, so it doesn't have them.
-- The `experiments/` folder gets created wherever you ran the app from, rather than next to the executable.
+See [Windows details](docs/windows.md) and [clean-machine testing](docs/testing.md).
+
+## Commands and lifecycle
+
+```bash
+python -m a2router diagnostics
+python -m a2router devices
+python -m a2router routes
+python -m a2router gui
+python -m a2router create-virtual "Application bus" --layout stereo
+python -m a2router add-route SOURCE_ID DESTINATION_ID
+python -m a2router disable-route ROUTE_UUID
+python -m a2router enable-route ROUTE_UUID
+python -m a2router remove-route ROUTE_UUID
+python -m a2router remove-virtual VIRTUAL_UUID
+python -m a2router save studio.json
+python -m a2router load studio.json
+```
+
+Use device IDs returned by `devices`. Read-only diagnostics do not activate saved routes. `python -m a2router --mock gui` uses a clearly labelled simulation and separate state. Windows CLI processes cannot sustain routing after exit; use the GUI.
+
+Closing the window hides/minimizes it. **Exit controller** leaves Linux server resources running but stops Windows processing. **Stop all managed routes** explicitly disables routes. Configuration restoration creates managed virtual devices before dependent routes; missing endpoints remain pending. Default speakers/microphones are not explicitly changed by the application.
+
+## Development checks
+
+```bash
+python -m pip install -e '.[test]'
+ruff check a2router tests tools/windows
+ruff format --check a2router tests tools/windows
+python -m pytest -q
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+```
+
+On Windows use `--config Release` for the build and `-C Release` for CTest. For isolated Linux audio integration, install the PipeWire utilities listed above and run:
+
+```bash
+dbus-run-session -- python tests/run_private_pipewire.py
+```
+
+Standard tests skip opt-in real-audio cases. Mock success and a successful CI build do not establish hardware audio or driver correctness. The newest Windows driver and delay changes have not been built or runtime-tested locally.
+
+## Source structure
+
+```text
+a2router/              Qt UI, controller, configuration, platform backends
+src/                   MultiRoute WASAPI engine, C ABI bridge, device helper
+drivers/windows/       Microsoft-derived render-only driver source and license
+tests/                 Python, C++ and opt-in audio integration tests
+tools/windows/         Reproducible application/driver builds and diagnostics
+docs/                  Platform setup, architecture and verification scope
+.github/workflows/     GitHub Actions builds and checks
+CMakeLists.txt         Native C++20 application build
+pyproject.toml         Python dependencies and entry point
+THIRD_PARTY_NOTICES.md  Upstream attribution and dependency notices
+```
+
+## Credits and licensing
+
+- **[vkr-6/MultiRoute](https://github.com/vkr-6/MultiRoute)** — source repository used as the foundation for A2Router's Windows engine.
+- **[FulminataXII/MultiRoute](https://github.com/FulminataXII/MultiRoute)** — original upstream audio-routing project. Credit to its authors for the WASAPI engine, ring buffers, drift controllers, telemetry and original frontends.
+- **[Microsoft Windows Driver Samples](https://github.com/microsoft/Windows-driver-samples)** — the included virtual driver derives from SimpleAudioSample. Original notices and its [Microsoft Public License](drivers/windows/a2router/LICENSE-Microsoft.txt) are retained; the exact revision is in [UPSTREAM.md](drivers/windows/a2router/UPSTREAM.md).
+- **OpenAI Codex** — AI coding assistant used to develop the A2Router application additions, Linux backend, Qt interface, configuration handling, Windows integration, driver adaptation, documentation and workflows under the project owner's direction. This development credit does not replace upstream authorship or imply verified correctness.
+
+No standalone license file was present in the imported MultiRoute checkout. A2Router does not assign a new blanket license to that existing engine. The MS-PL applies to the imported Microsoft driver component. See [third-party notices](THIRD_PARTY_NOTICES.md) for attribution and component licensing. Original [MultiRoute documentation](docs/upstream-windows.md) is retained.

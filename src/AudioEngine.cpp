@@ -922,10 +922,21 @@ std::string AudioEngine::Impl::startLocked(const EngineConfig& cfg) {
                                   IID_PPV_ARGS(&enumerator));
     if (FAILED(hr)) return "failed to create device enumerator";
 
-    // ---- loopback source = current default render endpoint ----
+    // Preserve default loopback for existing frontends; new controllers can
+    // select a stable render-loopback or physical capture endpoint explicitly.
     ComPtr<IMMDevice> captureDevice;
-    hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &captureDevice);
-    if (FAILED(hr)) return "no default render endpoint available";
+    if (cfg.capture_endpoint_id.empty()) {
+        hr = enumerator->GetDefaultAudioEndpoint(cfg.capture_from_input ? eCapture : eRender,
+                                                eConsole, &captureDevice);
+    } else {
+        hr = enumerator->GetDevice(cfg.capture_endpoint_id.c_str(), &captureDevice);
+    }
+    if (FAILED(hr)) return "requested capture endpoint is unavailable";
+    ComPtr<IMMEndpoint> captureEndpoint;
+    EDataFlow captureFlow = eAll;
+    if (FAILED(captureDevice.As(&captureEndpoint)) || FAILED(captureEndpoint->GetDataFlow(&captureFlow)) ||
+        captureFlow != (cfg.capture_from_input ? eCapture : eRender))
+        return "capture endpoint has the wrong data flow";
 
     LPWSTR rawCaptureId = nullptr;
     if (FAILED(captureDevice->GetId(&rawCaptureId))) return "failed to read capture endpoint id";
@@ -949,8 +960,8 @@ std::string AudioEngine::Impl::startLocked(const EngineConfig& cfg) {
 
     logger.event(LogLevel::Info, Event::MixFormatQueried, -1, sampleRate, blockAlign);
 
-    const DWORD captureFlags =
-        AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
+    const DWORD captureFlags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
+        (cfg.capture_from_input ? 0 : AUDCLNT_STREAMFLAGS_LOOPBACK);
     hr = captureClient->Initialize(AUDCLNT_SHAREMODE_SHARED, captureFlags, 10000000, 0,
                                    mixFormat(), nullptr);
     if (FAILED(hr)) return "failed to initialize loopback capture client";
@@ -965,7 +976,9 @@ std::string AudioEngine::Impl::startLocked(const EngineConfig& cfg) {
             return "requested delay out of range";
         delays.push_back(o.relative_delay_ms);
     }
-    normalizeDelays(delays);
+    if (cfg.normalize_output_delays) normalizeDelays(delays);
+    else if (std::any_of(delays.begin(), delays.end(), [](int64_t d) { return d < 0; }))
+        return "absolute additional delays must be nonnegative";
 
     bytesPerSecond = static_cast<size_t>(sampleRate) * static_cast<size_t>(blockAlign);
     bytesPerMs = static_cast<double>(bytesPerSecond) / 1000.0;
@@ -988,7 +1001,7 @@ std::string AudioEngine::Impl::startLocked(const EngineConfig& cfg) {
         for (size_t i = 0; i < cfg.outputs.size(); ++i) {
             const std::wstring& wantId = cfg.outputs[i].endpoint_id;
 
-            if (wantId == captureId.get()) {
+            if (!cfg.capture_from_input && wantId == captureId.get()) {
                 logger.message(LogLevel::Warn, static_cast<int>(i),
                                "output %zu is the loopback source itself; skipped", i);
                 continue;

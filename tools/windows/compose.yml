@@ -1,0 +1,32 @@
+services:
+  windows:
+    image: dockurr/windows:latest
+    container_name: a2router-windows-test
+    environment:
+      VERSION: "11e"
+      RAM_SIZE: "4G"
+      CPU_CORES: "2"
+      DISK_SIZE: "80G"
+      AUDIO: "Y"
+      ARGUMENTS: >-
+        -audiodev none,id=a2null
+        -device intel-hda,id=a2audio1
+        -device hda-duplex,bus=a2audio1.0,audiodev=a2null
+        -device intel-hda,id=a2audio2
+        -device hda-output,bus=a2audio2.0,audiodev=a2null
+        -device intel-hda,id=a2audio3
+        -device hda-output,bus=a2audio3.0,audiodev=a2null
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "127.0.0.1:18006:8006"
+      - "127.0.0.1:13389:3389/tcp"
+      - "127.0.0.1:13389:3389/udp"
+    volumes:
+      - ../../build/windows-vm/storage:/storage
+      - ../..:/shared
+      - ../../build/windows-vm/oem:/oem
+    stop_grace_period: 2m

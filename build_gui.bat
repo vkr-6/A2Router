@@ -1,15 +1,15 @@
 @echo off
 REM ============================================================================
-REM MultiMux - GUI build
+REM a2router - GUI build
 REM
 REM Expected layout (this script lives at the repo root):
-REM   MultiMux\
+REM   a2router\
 REM     build_gui.bat        <- this file
 REM     build.bat
 REM     src\                 <- all .cpp / .h
 REM     third_party\imgui\   <- git clone --depth 1 https://github.com/ocornut/imgui.git
 REM     build\               <- created by this script; everything generated lands here
-REM       MultiMuxGui.exe    <- the only file needed to run
+REM       a2routerGui.exe    <- the only file needed to run
 REM       obj\               <- intermediates (.obj/.pdb); safe to delete
 REM       experiments\       <- created at runtime by the app
 REM
@@ -51,7 +51,7 @@ if not exist "%BUILD%" mkdir "%BUILD%"
 if not exist "%OBJ%" mkdir "%OBJ%"
 
 REM /MT statically links the C runtime so the .exe runs on a machine without
-REM the VC++ Redistributable installed - it makes build\MultiMuxGui.exe
+REM the VC++ Redistributable installed - it makes build\a2routerGui.exe
 REM genuinely self-contained, which is the point of shipping the folder.
 REM
 REM /wd4324 silences "structure was padded due to alignment specifier". That
@@ -59,11 +59,11 @@ REM padding is deliberate: PaddedAtomic and the log queue's Cell are
 REM alignas(64) specifically to keep producer and consumer indices on separate
 REM cache lines. The warning reports the feature working as intended.
 
-cl /nologo /std:c++17 /EHsc /W4 /permissive- /MT /O2 ^
+cl /nologo /std:c++20 /EHsc /W4 /permissive- /MT /O2 ^
    /D_UNICODE /DUNICODE /DNDEBUG ^
    /wd4324 ^
    /I"%SRC%" /I"%IMGUI%" /I"%IMGUI%\backends" ^
-   /Fo"%OBJ%\\" /Fd"%OBJ%\MultiMuxGui.pdb" ^
+   /Fo"%OBJ%\\" /Fd"%OBJ%\a2routerGui.pdb" ^
    "%SRC%\main_gui.cpp" ^
    "%SRC%\AudioEngine.cpp" ^
    "%SRC%\ExperimentRecorder.cpp" ^
@@ -74,7 +74,7 @@ cl /nologo /std:c++17 /EHsc /W4 /permissive- /MT /O2 ^
    "%IMGUI%\backends\imgui_impl_win32.cpp" ^
    "%IMGUI%\backends\imgui_impl_dx11.cpp" ^
    d3d11.lib dxgi.lib ^
-   /Fe:"%BUILD%\MultiMuxGui.exe"
+   /Fe:"%BUILD%\a2routerGui.exe"
 
 if %ERRORLEVEL% NEQ 0 (
     echo.
@@ -83,5 +83,5 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo.
-echo Built %BUILD%\MultiMuxGui.exe
+echo Built %BUILD%\a2routerGui.exe
 echo Ship the build folder ^(or just the .exe^) - no source or ImGui needed at runtime.

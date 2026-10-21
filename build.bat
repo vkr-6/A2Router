@@ -1,9 +1,9 @@
 @echo off
 REM ============================================================================
-REM MultiMux - console build (no GUI, no ImGui dependency)
+REM a2router - console build (no GUI, no ImGui dependency)
 REM
 REM Same layout as build_gui.bat; see that file for the folder diagram.
-REM Produces build\MultiMux.exe.
+REM Produces build\a2router.exe.
 REM
 REM Note: the console frontend predates the volume and live-delay features and
 REM does not expose them. It still routes audio correctly.
@@ -37,14 +37,14 @@ if not exist "%OBJ%" mkdir "%OBJ%"
 
 REM See build_gui.bat for why /MT and /wd4324 are used.
 
-cl /nologo /std:c++17 /EHsc /W4 /permissive- /MT /O2 ^
+cl /nologo /std:c++20 /EHsc /W4 /permissive- /MT /O2 ^
    /D_UNICODE /DUNICODE /DNDEBUG ^
    /wd4324 ^
    /I"%SRC%" ^
-   /Fo"%OBJ%\\" /Fd"%OBJ%\MultiMux.pdb" ^
+   /Fo"%OBJ%\\" /Fd"%OBJ%\a2router.pdb" ^
    "%SRC%\main_cli.cpp" ^
    "%SRC%\AudioEngine.cpp" ^
-   /Fe:"%BUILD%\MultiMux.exe"
+   /Fe:"%BUILD%\a2router.exe"
 
 if %ERRORLEVEL% NEQ 0 (
     echo.
@@ -53,4 +53,4 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo.
-echo Built %BUILD%\MultiMux.exe
+echo Built %BUILD%\a2router.exe

@@ -1,2 +1,48 @@
-build/
-third_party/
+# Generated builds, dependencies and packaging
+/build/
+/dist/
+/third_party/
+/.venv/
+/venv/
+/packages/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE state and native build output
+.vs/
+.vscode/
+*.user
+*.suo
+*.obj
+*.pdb
+*.ilk
+*.exe
+*.dll
+*.sys
+*.cat
+
+# VM disks, downloaded images and local certificates
+*.iso
+*.qcow2
+*.vhd
+*.vhdx
+*.vmdk
+*.pfx
+*.p12
+*.key
+*.cer
+*.zip
+
+# Local environment and continuation notes (not distributable source)
+.env
+.env.*
+!.env.example
+/prompt.md
+/progress.md
+.DS_Store
+Thumbs.db
