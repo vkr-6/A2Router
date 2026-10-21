@@ -1,8 +1,6 @@
 name: A2Router build
 
 on:
-  push:
-  pull_request:
   workflow_dispatch:
     inputs:
       build_driver:

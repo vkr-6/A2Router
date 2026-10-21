@@ -17,7 +17,7 @@ A compact desktop application for routing audio from multiple sources to multipl
 
 ## Build with GitHub Actions
 
-Push this source tree to your repository. The [A2Router build workflow](.github/workflows/build.yml) runs on pushes and pull requests and can also be started from **Actions → A2Router build → Run workflow**.
+Push this source tree to your repository. The [A2Router build workflow](.github/workflows/build.yml) is **manual-only**: start it from **Actions → A2Router build → Run workflow**. Pushing commits or opening pull requests does not trigger builds.
 
 | Job | Output / checks |
 |---|---|
