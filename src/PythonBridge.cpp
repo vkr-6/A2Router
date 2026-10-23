@@ -2,6 +2,10 @@
 // Multiple engines render shared-mode streams; Windows performs their mixing.
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
+// Instantiate SDK property keys (including PKEY_AudioEngine_DeviceFormat)
+// in this translation unit instead of relying on an SDK import-library symbol.
+// This must precede all SDK headers so DEFINE_PROPERTYKEY sees INITGUID.
+#include <initguid.h>
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <Audioclient.h>

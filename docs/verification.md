@@ -34,3 +34,9 @@ Earlier sessions verified a Windows build, real endpoint discovery and packaged 
 A read-only query of the existing Windows host reported `VB-Audio Virtual Cable`, `ConfigManagerErrorCode=10` and `Status=Error`. No installation, repair, format/name change or audio playback was attempted. This observation does not diagnose the user's separate working target. Control tests used simulated native APIs; it is not evidence that this host's cable can play audio.
 
 UI previews under `docs/images/` are captured from the actual Qt application with labelled simulated backends. Reference layout ideas were reviewed from the official EarTrumpet and RME TotalMix pages; no assets or UI code were copied.
+
+## Windows property-key linker correction
+
+The reported GitHub build compiled all native sources but failed DLL linking with `LNK2019: PKEY_AudioEngine_DeviceFormat`. The bridge now includes `initguid.h` before SDK headers, instantiating the SDK's `DEFINE_PROPERTYKEY` definitions in that translation unit. The channel decoder's signed/unsigned comparison warning was also corrected without changing decoding behavior.
+
+Validation: `g++ -std=c++20 -Wall -Wextra -Werror -pthread -Isrc tests/native_core.cpp` compiled successfully and its native regression executable passed. `git diff --check` passed. The corrected Windows DLL link requires another manual workflow run; it was not rebuilt locally and nothing was installed on Windows.

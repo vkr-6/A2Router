@@ -30,7 +30,7 @@ struct PcmEncoding {
             return std::isfinite(value) ? value : 0.0;
         }
         uint32_t word = 0;
-        for (unsigned i = 0; i < bits / 8; ++i) word |= uint32_t(data[i]) << (8 * i);
+        for (unsigned i = 0; i < static_cast<unsigned>(bits) / 8u; ++i) word |= uint32_t(data[i]) << (8 * i);
         // Valid PCM bits are left-aligned in their container (WAVEFORMATEXTENSIBLE).
         const int64_t signedValue = word & (uint32_t(1) << (bits - 1))
             ? int64_t(word) - (int64_t(1) << bits) : int64_t(word);
