@@ -1,12 +1,18 @@
 # Windows
 
-A2Router is a portable x64 application. Extract the entire ZIP and launch `a2router.exe`; no app installer, Python installation or WDK is needed on the target machine. Build instructions are in the [README](../README.md). GitHub Actions are manual-only and produce GUI, CLI and native artifacts.
+A2Router is a portable x64 application. Extract the entire ZIP and launch `a2router.exe`; no app installer, Python installation or WDK is needed on the target machine. Build instructions are in the [README](../README.md). GitHub Actions are manual-only and produce one GUI application and its portable ZIP. No console executables are distributed.
 
 ## Virtual cable
 
 The Virtual devices page installs the original VB-CABLE package only after **Create output** is clicked. Existing endpoints are reused. The driver helper checks its Authenticode signature, waits for vendor setup and checks PnP. The backend refreshes until an active endpoint appears. Ready endpoints can be used immediately; pending restart or missing endpoints are reported. No forced restart occurs.
 
-One base cable is included. Its playback alternatives share the same transport; A2Router never pretends they are independent named cables. The name field creates a persisted A2Router display alias. **Configure channels / Windows name…** opens Windows Sound, which controls the actual system name, speaker layout and default format. A2Router displays the reported result instead of writing undocumented endpoint policy/registry settings.
+One base cable is included. Its playback alternatives share transport; they are not independent named cables. Detection follows the audio endpoint's topology to its adapter and checks the actual vendor service, with exact `VB-Audio Virtual Cable` / `VB-Audio Point` adapter names as fallbacks. The supplied INF confirms those names. User-editable endpoint names are not used as identities.
+
+Select an endpoint in Virtual devices and **Scan formats**. Exact `IAudioClient::IsFormatSupported` exclusive-format probes provide candidate 1/2/4/6/8/16-channel PCM/float formats; unavailable combinations are omitted. The GUI exposes channel count, bit depth/sample rate and the uncompressed PCM transport rate. **Apply format** refuses active managed routes, requests the selected Windows shared default format, verifies it and restores/verifies the previous format on failure. Playback and recording endpoints must each be configured as needed. Changes affect other apps using that endpoint too.
+
+Windows exposes no documented shared-default-format setter. `src/WindowsEndpointControl.h` isolates the known `IPolicyConfig` compatibility interface's first four methods; unsupported interfaces return a clear error and **Windows Sound…** remains available. No default-device selection API or registry patch is used. Compatibility must be tested on target Windows versions. The [public interface reference](https://github.com/frgnca/AudioDeviceCmdlets/blob/master/SOURCE/IPolicyConfig.cs) documents the known method order; this is not a Microsoft stability guarantee.
+
+**Rename in Windows** writes `PKEY_Device_FriendlyName`, commits and verifies it. The native code attempts rollback on failure. If administrator access is required, the frozen GUI requests UAC and runs an internal rename-only child of the same portable executable; it does not install a driver, load a profile or start routes. The parent verifies the new name by discovery. Stable endpoint IDs and route definitions remain intact.
 
 **Remove driver…** requires confirmation and removal of dependent routes. It invokes the original vendor uninstaller, verifies removal/pending restart and reports failure. Removing the portable application folder does not uninstall the shared driver. No driver operation runs on startup, refresh, profile restoration, tests or CI.
 
@@ -21,3 +27,7 @@ The per-output FIFO and drift controllers retain source-format units, including 
 ## Verification
 
 Linux Qt tests, native matrix sample tests and Windows control/PowerShell simulations were run for this revision. Windows testing used existing Python/PowerShell with tests shared from Linux: no Windows packages, tools or drivers were installed. No Windows compiler was available, so the updated bridge/portable EXE must be built by the manual workflow and tested on a suitable Windows target. Driver install/removal and audible playback were not exercised.
+
+## Main Audio page
+
+Native `IAudioEndpointVolume` provides master volume/mute and `IAudioMeterInformation` provides observed peaks for physical inputs, outputs and actual cable capture/playback endpoints. Generated loopback aliases are excluded from duplicate mixer controls. Fast meter polling is serialized off the GUI thread and only runs while Audio is visible. Charts retain stable device identity, avoid interpolating across gaps and show unavailable data explicitly. Volume control does not restart source sessions.

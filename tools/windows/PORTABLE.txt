@@ -1,31 +1,40 @@
 A2Router — Advanced Audio Router (Windows x64)
 
-Extract this entire folder and launch a2router.exe. Use a2router-cli.exe diagnostics
-for observations. Python, Qt and the native WASAPI bridge are bundled.
-No app installer is required. Starting A2Router does not install a driver.
+Extract the complete folder and launch a2router.exe. This is the only A2Router
+application executable; the vendor folder retains original VB-Audio utilities. Python, Qt and the native WASAPI bridge are bundled.
+There is no separate console version and no app installer.
 
-Virtual devices: enter an A2Router display name and click Create output to install
-or reuse the single VB-CABLE. Installation requests administrator approval,
-verifies PnP and refreshes devices. An active endpoint can be used immediately;
-restart requirements are reported when pending or no endpoint becomes available.
-Configure channels / Windows name opens Windows Sound for actual endpoint
-settings. The name field in A2Router is a saved local alias only.
+Audio is the main page: measured Windows endpoint peaks, master volume/mute,
+filters and route status. Missing meter data is shown as unavailable.
+Other pages are available from the side navigation.
 
-Keep vendor/vb-cable and vendor/install-vbcable.ps1 beside the app. Send apps to
-CABLE Input, then route CABLE Output to speakers/headphones. For driver removal,
-remove dependent routes and explicitly choose Remove driver in Virtual devices.
-Removal affects all apps and may need a restart. To remove A2Router itself, exit
-and delete the portable folder. Check Windows defaults after installing drivers.
+Virtual devices lists an existing VB-CABLE without reinstalling it. Add VB-CABLE
+installs the original vendor driver only when explicitly clicked. Administrator
+approval is required; active endpoints are refreshed automatically. Restart
+requirements are reported rather than forcing a reboot.
 
-Optional Custom channel routing supports remapping, duplication, summing and gain.
-Unmapped outputs are silent. Mixed peaks are clipped to ±1; reduce gain to avoid
-clipping. Synchronization reports available buffering, rate correction and errors.
-Live delays use native buffers; restart fallback is explicitly opt-in.
-No measured acoustic synchronization or bit-perfect hardware claim is made.
+Select a playback or recording endpoint and Scan formats. Choose a supported
+channel count, bit depth and sample rate, then Apply format. Stop managed routes
+using that endpoint first. For multichannel sources, configure the recording
+endpoint too. Source/destination channel editors follow the active formats.
+Rename in Windows changes the real endpoint name, requesting elevation when
+required, and retains the stable ID used by routes. Windows Sound remains a
+fallback. Windows format-policy compatibility needs target-machine verification.
+
+Keep vendor/vb-cable and vendor/install-vbcable.ps1 beside the app. The base
+package is one shared cable. Send apps to its playback side and route its
+recording side in A2Router. Remove driver requires explicit confirmation and
+removal of dependent routes; this affects all apps and may require a restart.
+Exit and delete the portable folder to remove A2Router itself.
+
+Optional channel routing provides remapping, duplication, summing and gain.
+Unmapped outputs are silent; source omissions require confirmation. Mixed peaks
+are clipped to +/-1. Synchronization shows native buffering/drift metrics and
+supported delay controls. No bit-perfect or measured acoustic-sync claim.
 
 Settings: %APPDATA%\a2router. Closing hides/minimizes; Exit stops Windows routing.
 VB-CABLE is donationware by VB-Audio Software: https://www.vb-cable.com/
 Donations/licensing: https://vb-audio.com/Services/licensing.htm
-Original vendor files and license are unchanged. No additional A/B/C/D drivers.
+Original vendor files/license are unchanged. No additional A/B/C/D drivers.
 Credits: vkr-6/MultiRoute, originally FulminataXII/MultiRoute; VB-Audio Software;
 OpenAI Codex under the owner's direction. See THIRD_PARTY_NOTICES.md and licenses/.

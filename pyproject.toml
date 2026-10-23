@@ -27,4 +27,4 @@ markers = ["integration: opt-in real audio server tests"]
 line-length = 110
 
 [tool.setuptools.package-data]
-a2router = ["assets/*.svg"]
+a2router = ["assets/*.svg", "assets/*.qss"]

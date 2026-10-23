@@ -15,19 +15,23 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
+    QStackedWidget,
     QSystemTrayIcon,
     QTableWidget,
-    QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -35,6 +39,7 @@ from PySide6.QtWidgets import (
 )
 
 from a2router.controller import config_dir
+from a2router.dashboard import Dashboard
 from a2router.models import VirtualDevice
 
 
@@ -63,39 +68,74 @@ class MainWindow(QMainWindow):
         self._vbcable_page = self.backend.capabilities().get("virtual_device_provider") == "VB-CABLE"
         self.setWindowTitle("A2Router — Advanced Audio Router")
         self.setWindowIcon(QIcon(str(Path(__file__).parent / "assets/a2router.svg")))
-        self.resize(1050, 700)
-        self.setMinimumSize(820, 560)
-        self.setStyleSheet(
-            "QPushButton { padding: 5px 12px; } QTabBar::tab { padding: 9px 15px; } "
-            "QTreeView::item { padding: 3px 0; } QGroupBox { margin-top: 8px; } "
-            "QGroupBox::title { subcontrol-origin: margin; left: 10px; }"
-        )
-        self.tabs = QTabWidget()
-        self.tabs.setDocumentMode(True)
-        brand = QLabel()
-        brand.setPixmap(self.windowIcon().pixmap(26, 26))
-        brand.setContentsMargins(8, 2, 12, 2)
-        brand.setToolTip("A2Router · Advanced Audio Router")
-        self.tabs.setCornerWidget(brand)
-        self.setCentralWidget(self.tabs)
+        self.resize(1200, 820)
+        self.setMinimumSize(980, 680)
+        self.setStyleSheet((Path(__file__).parent / "assets/style.qss").read_text())
+        self.buttons = []
+        self.tabs = QStackedWidget()
+        root = QWidget()
+        shell = QHBoxLayout(root)
+        shell.setContentsMargins(0, 0, 0, 0)
+        shell.setSpacing(0)
+        sidebar = QFrame()
+        sidebar.setObjectName("Sidebar")
+        sidebar.setFixedWidth(208)
+        side = QVBoxLayout(sidebar)
+        side.setContentsMargins(16, 25, 16, 18)
+        logo = QLabel()
+        logo.setPixmap(self.windowIcon().pixmap(44, 44))
+        side.addWidget(logo)
+        brand = QLabel("A2Router")
+        brand.setObjectName("Brand")
+        side.addWidget(brand)
+        caption = QLabel("Advanced Audio Router")
+        caption.setObjectName("MutedText")
+        side.addWidget(caption)
+        side.addSpacing(25)
+        self.navigation = QListWidget()
+        self.navigation.setObjectName("Navigation")
+        side.addWidget(self.navigation, 1)
+        backend_label = QLabel(self.backend.name)
+        backend_label.setObjectName("MutedText")
+        backend_label.setWordWrap(True)
+        side.addWidget(backend_label)
+        exit_button = QPushButton("Exit A2Router")
+        exit_button.clicked.connect(self.exit_application)
+        side.addWidget(exit_button)
+        shell.addWidget(sidebar)
+        body = QVBoxLayout()
+        body.setContentsMargins(26, 22, 26, 12)
+        body.setSpacing(16)
+        heading = QHBoxLayout()
+        self.header_title = QLabel("Audio")
+        self.header_title.setObjectName("PageTitle")
+        heading.addWidget(self.header_title, 1)
+        self.button(heading, "Refresh", lambda: self.refresh(manual=True))
+        body.addLayout(heading)
+        body.addWidget(self.tabs, 1)
+        shell.addLayout(body, 1)
+        self.setCentralWidget(root)
         self.error = QLabel()
         self.error.setWordWrap(True)
         self.statusBar().addWidget(self.error, 1)
-        self.buttons = []
+        self._dashboard_page()
         self._devices_page()
         self._routing_page()
         self._virtual_page()
         self._status_page()
         self._settings_page()
-        menu = self.menuBar().addMenu("Application")
-        show = QAction("Show window", self)
-        show.triggered.connect(self.showNormal)
-        exit_label = (
-            "Exit controller" if sys.platform == "win32" else "Exit controller (leave server routes running)"
+        self.navigation.currentRowChanged.connect(self.tabs.setCurrentIndex)
+        self.navigation.currentRowChanged.connect(
+            lambda row: self.header_title.setText(self.navigation.item(row).text()) if row >= 0 else None
         )
-        exit_action = QAction(exit_label, self)
-        exit_action.triggered.connect(self.exit_application)
+        self.navigation.setCurrentRow(0)
+        # Window navigation has no menu bar; tray lifecycle controls remain available.
+        menu = QMenu(self)
+        show = QAction("Show A2Router", self)
+        show.triggered.connect(self.showNormal)
         menu.addAction(show)
+        exit_action = QAction("Exit A2Router", self)
+        exit_action.triggered.connect(self.exit_application)
         menu.addAction(exit_action)
         self.tray = None
         if QSystemTrayIcon.isSystemTrayAvailable():
@@ -108,6 +148,10 @@ class MainWindow(QMainWindow):
         self.timer.setInterval(3000)
         self.timer.timeout.connect(self.refresh)
         self.timer.start()
+        self.meter_timer = QTimer(self)
+        self.meter_timer.setInterval(250)
+        self.meter_timer.timeout.connect(self.poll_meters)
+        self.meter_timer.start()
         self.subscription = None
         from a2router.backends.linux_pipewire import PipeWireBackend
 
@@ -130,9 +174,10 @@ class MainWindow(QMainWindow):
     def page(self, title):
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
-        self.tabs.addTab(widget, title)
+        self.tabs.addWidget(widget)
+        self.navigation.addItem(title)
         return layout
 
     def button(self, layout, title, action, capability=True):
@@ -157,6 +202,40 @@ class MainWindow(QMainWindow):
         layout.addWidget(tree)
         return tree
 
+    def _dashboard_page(self):
+        layout = self.page("Audio")
+        self.dashboard = Dashboard(self.change_device_volume, self.change_device_mute)
+        layout.addWidget(self.dashboard, 1)
+        actions = QHBoxLayout()
+        layout.addLayout(actions)
+        self.button(
+            actions,
+            "Start routes",
+            lambda: self.submit(self.controller.start_routes),
+            self.backend.capabilities()["routing"],
+        )
+        self.button(
+            actions,
+            "Stop routes",
+            lambda: self.submit(self.controller.stop_routes),
+            self.backend.capabilities()["routing"],
+        )
+        actions.addStretch()
+
+    def change_device_volume(self, device_id, volume):
+        self.submit(
+            lambda: self.backend.set_device_volume(device_id, volume), persist=False, refresh_backend=False
+        )
+
+    def change_device_mute(self, device_id, muted):
+        self.submit(
+            lambda: self.backend.set_device_mute(device_id, muted), persist=False, refresh_backend=False
+        )
+
+    def poll_meters(self):
+        if not self.busy and self.tabs.currentIndex() == 0 and self.backend.capabilities().get("meters"):
+            self.submit(self.backend.poll_controls, persist=False, background=True, refresh_backend=False)
+
     def _devices_page(self):
         layout = self.page("Devices")
         self.device_tree = self.tree(
@@ -172,9 +251,16 @@ class MainWindow(QMainWindow):
     def inspect_device(self):
         selected = self.device_tree.selectedItems()
         if selected:
-            self._update_text(
-                self.device_details, json.dumps(self.view_devices[selected[0].data(0, Qt.UserRole)], indent=2)
+            device = self.view_devices[selected[0].data(0, Qt.UserRole)]
+            positions = ", ".join(p.replace("-", " ") for p in device.get("positions", [])) or "Not reported"
+            details = (
+                f"{device['name']}\n\n"
+                f"Type: {device['kind'].title()}    State: {device['state']}\n"
+                f"Channels: {device.get('channels') or 'Not reported'}    Layout: {positions}\n"
+                f"Sample rate: {device.get('sample_rate') or 'Not reported'} Hz    Format: {device.get('sample_format') or 'Not reported'}\n"
+                f"Default device: {'Yes' if device.get('default') else 'No'}"
             )
+            self._update_text(self.device_details, details)
 
     def _routing_page(self):
         layout = self.page("Routing")
@@ -231,6 +317,7 @@ class MainWindow(QMainWindow):
         capable = self.backend.capabilities()["routing"]
         self.add_route_button = self.button(action_row, "Add route", self.add_route, capable)
         self.add_route_button.setDefault(True)
+        self.add_route_button.setObjectName("Primary")
         self.route_tree = self.tree(
             layout, ["Source", "Destination", "Enabled", "Status", "Channels", "Error"]
         )
@@ -284,9 +371,17 @@ class MainWindow(QMainWindow):
 
     def _reset_channel_editor(self):
         pair = (self.source.currentData(), self.destination.currentData())
-        if pair == self._channel_pair:
+        signature = tuple(
+            (
+                ident,
+                self.view_devices.get(ident, {}).get("channels"),
+                tuple(self.view_devices.get(ident, {}).get("positions", [])),
+            )
+            for ident in pair
+        )
+        if signature == self._channel_pair:
             return
-        self._channel_pair = pair
+        self._channel_pair = signature
         self.channel_table.setRowCount(0)
         source = self.view_devices.get(pair[0], {})
         destination = self.view_devices.get(pair[1], {})
@@ -339,38 +434,89 @@ class MainWindow(QMainWindow):
         if self._vbcable_page:
             row = QHBoxLayout()
             self.virtual_name = QLineEdit()
-            self.virtual_name.setPlaceholderText("Display name in A2Router")
+            self.virtual_name.setPlaceholderText("New cable display name")
             row.addWidget(self.virtual_name, 1)
             self.install_cable_button = self.button(
                 row,
-                "Create output",
+                "Add VB-CABLE",
                 self.create_cable,
                 self.backend.capabilities().get("install_virtual_driver", False),
             )
+            self.install_cable_button.setObjectName("Primary")
             self.create_virtual_button = self.install_cable_button
             layout.addLayout(row)
-            self.vbcable_status = QLabel("Checking…")
+            self.vbcable_status = QLabel("Checking endpoints…")
+            self.vbcable_status.setObjectName("MutedText")
             layout.addWidget(self.vbcable_status)
-            self.virtual_tree = self.tree(layout, ["Endpoint", "Channels", "Status", "Windows ID"])
+            self.virtual_tree = self.tree(layout, ["Endpoint", "Direction", "Active format", "Status"])
+            self.virtual_tree.setMaximumHeight(210)
+            for column, width in enumerate((300, 100, 300, 120)):
+                self.virtual_tree.setColumnWidth(column, width)
+            group = QGroupBox("Endpoint configuration")
+            form = QFormLayout(group)
+            form.setContentsMargins(18, 22, 18, 18)
+            form.setSpacing(12)
+            self.cable_endpoint = QComboBox()
+            self.cable_endpoint.currentIndexChanged.connect(self._cable_selection_changed)
+            form.addRow("Endpoint", self.cable_endpoint)
+            row = QHBoxLayout()
+            self.endpoint_name = QLineEdit()
+            row.addWidget(self.endpoint_name, 1)
+            self.rename_button = self.button(
+                row,
+                "Rename in Windows",
+                self.rename_cable_endpoint,
+                self.backend.capabilities().get("device_rename", False),
+            )
+            form.addRow("Windows name", row)
+            row = QHBoxLayout()
+            self.channel_choice = QComboBox()
+            self.channel_choice.currentIndexChanged.connect(self._format_channel_changed)
+            row.addWidget(self.channel_choice, 1)
+            self.scan_formats_button = self.button(
+                row,
+                "Scan formats",
+                self.scan_cable_formats,
+                self.backend.capabilities().get("device_configuration", False),
+            )
+            form.addRow("Channels", row)
+            self.format_choice = QComboBox()
+            self.format_choice.currentIndexChanged.connect(self._format_rate_changed)
+            form.addRow("Bit depth / sample rate", self.format_choice)
+            self.format_data_rate = QLabel("Scan this endpoint to discover supported formats.")
+            self.format_data_rate.setObjectName("MutedText")
+            form.addRow("PCM data rate", self.format_data_rate)
+            actions = QHBoxLayout()
+            self.apply_format_button = self.button(
+                actions,
+                "Apply format",
+                self.apply_cable_format,
+                self.backend.capabilities().get("device_configuration", False),
+            )
+            self.apply_format_button.setObjectName("Primary")
+            self.button(actions, "Windows Sound…", self.configure_windows_cable)
+            actions.addStretch()
+            form.addRow(actions)
+            layout.addWidget(group)
             row = QHBoxLayout()
             layout.addLayout(row)
-            self.button(row, "Configure channels / Windows name…", self.configure_windows_cable)
+            label = QLabel(
+                '<a style="color:#52dec3" href="https://vb-audio.com/Cable/">VB-Audio Software</a> · '
+                '<a style="color:#52dec3" href="https://vb-audio.com/Services/licensing.htm">Donate / license</a>'
+            )
+            label.setOpenExternalLinks(True)
+            row.addWidget(label, 1)
             self.button(
                 row,
                 "Remove driver…",
                 self.remove_cable,
                 self.backend.capabilities().get("install_virtual_driver", False),
             )
-            row.addStretch()
-            label = QLabel(
-                'One shared cable · <a href="https://vb-audio.com/Cable/">VB-Audio Software</a> · '
-                '<a href="https://vb-audio.com/Services/licensing.htm">Donate / license</a>'
+            self._cable_format_signature = None
+            self.cable_endpoint.setToolTip(
+                "Playback and recording formats are separate. Configure the recording endpoint for multichannel capture."
             )
-            label.setOpenExternalLinks(True)
-            layout.addWidget(label)
-            self.virtual_name.setToolTip(
-                "Saved display name in A2Router. Change the system name and speaker layout in Windows configuration."
-            )
+            layout.addStretch()
             return
         row = QHBoxLayout()
         self.virtual_name = QLineEdit()
@@ -400,8 +546,82 @@ class MainWindow(QMainWindow):
                 )
             )
 
+    def _cable_selection_changed(self):
+        device = self.view_devices.get(self.cable_endpoint.currentData(), {})
+        self.endpoint_name.setText(device.get("properties", {}).get("windows_name", device.get("name", "")))
+        self._cable_format_signature = None
+        with QSignalBlocker(self.channel_choice):
+            self.channel_choice.clear()
+        self._load_format_choices()
+
+    def _load_format_choices(self):
+        device = self.view_devices.get(self.cable_endpoint.currentData(), {})
+        options = device.get("properties", {}).get("supported_formats", [])
+        signature = (device.get("id"), json.dumps(options, sort_keys=True))
+        if signature == self._cable_format_signature:
+            return
+        self._cable_format_signature = signature
+        channels = sorted({config["channels"] for config in options})
+        previous_channel = self.channel_choice.currentData()
+        self._update_combo(self.channel_choice, [(count, f"{count} channels") for count in channels])
+        self.channel_choice.setEnabled(bool(channels))
+        if device.get("channels") in channels and previous_channel not in channels:
+            self.channel_choice.setCurrentIndex(self.channel_choice.findData(device["channels"]))
+        self._format_channel_changed()
+
+    def _format_channel_changed(self):
+        device = self.view_devices.get(self.cable_endpoint.currentData(), {})
+        options = device.get("properties", {}).get("supported_formats", [])
+        old = self.format_choice.currentData()
+        with QSignalBlocker(self.format_choice):
+            self.format_choice.clear()
+            for config in options:
+                if config["channels"] != self.channel_choice.currentData():
+                    continue
+                encoding = "Float" if config["encoding"] == "float" else "PCM"
+                packed = (
+                    f" / {config['container_bits']}-bit container"
+                    if config["bits"] != config["container_bits"]
+                    else ""
+                )
+                label = f"{config['bits']}-bit {encoding}{packed} · {config['sample_rate'] / 1000:g} kHz"
+                self.format_choice.addItem(label, config)
+            index = self.format_choice.findData(old)
+            if index >= 0:
+                self.format_choice.setCurrentIndex(index)
+        self.format_choice.setEnabled(self.format_choice.count() > 0)
+        self._format_rate_changed()
+
+    def _format_rate_changed(self):
+        config = self.format_choice.currentData()
+        if config:
+            rate = config["channels"] * config["sample_rate"] * config["container_bits"] / 1e6
+            self.format_data_rate.setText(f"{rate:g} Mbit/s · uncompressed PCM")
+        else:
+            self.format_data_rate.setText("Scan this endpoint to discover supported formats.")
+        self.apply_format_button.setEnabled(
+            bool(config)
+            and bool(self.apply_format_button.property("capable"))
+            and not (self.busy and not self._background)
+        )
+
+    def scan_cable_formats(self):
+        ident = self.cable_endpoint.currentData()
+        if ident:
+            self.submit(lambda: self.backend.inspect_formats(ident), persist=False)
+
+    def apply_cable_format(self):
+        ident, config = self.cable_endpoint.currentData(), self.format_choice.currentData()
+        if ident and config:
+            self.submit(lambda: self.backend.configure_device_format(ident, config), persist=False)
+
+    def rename_cable_endpoint(self):
+        ident, name = self.cable_endpoint.currentData(), self.endpoint_name.text()
+        if ident:
+            self.submit(lambda: self.backend.rename_device(ident, name))
+
     def create_cable(self):
-        name = self.virtual_name.text()
+        name = self.virtual_name.text().strip() or "VB-CABLE"
         self.submit(lambda: self.backend.configure_cable(name))
 
     def configure_windows_cable(self):
@@ -544,25 +764,37 @@ class MainWindow(QMainWindow):
 
     def _settings_page(self):
         layout = self.page("Settings")
-        layout.addWidget(QLabel("Save or restore your routing profile."))
-        self.button(layout, "Save profile…", self.save_profile)
-        self.button(layout, "Load profile…", self.load_profile)
-        capable = self.backend.capabilities()["routing"]
-        self.button(
-            layout, "Start all managed routes", lambda: self.submit(self.controller.start_routes), capable
-        )
-        self.button(
-            layout, "Stop all managed routes", lambda: self.submit(self.controller.stop_routes), capable
-        )
-        self.button(layout, "Refresh diagnostics", self.refresh)
+        profiles = QGroupBox("Routing profiles")
+        box = QVBoxLayout(profiles)
+        box.setContentsMargins(18, 22, 18, 18)
+        caption = QLabel("Save your current routes or restore a profile.")
+        caption.setObjectName("MutedText")
+        box.addWidget(caption)
+        row = QHBoxLayout()
+        self.button(row, "Save profile…", self.save_profile)
+        self.button(row, "Load profile…", self.load_profile)
+        row.addStretch()
+        box.addLayout(row)
+        layout.addWidget(profiles)
+        diagnostic_group = QGroupBox("Diagnostics")
+        box = QVBoxLayout(diagnostic_group)
+        box.setContentsMargins(18, 22, 18, 18)
+        row = QHBoxLayout()
+        label = QLabel(self.backend.name)
+        label.setObjectName("MutedText")
+        row.addWidget(label, 1)
+        self.button(row, "Refresh diagnostics", self.refresh)
+        box.addLayout(row)
         self.diagnostics = QPlainTextEdit()
         self.diagnostics.setReadOnly(True)
-        layout.addWidget(self.diagnostics)
-        layout.addWidget(
-            QLabel(
-                "Close hides to tray when available. Exit leaves Linux server modules running; Windows exit stops its engine."
-            )
+        box.addWidget(self.diagnostics)
+        layout.addWidget(diagnostic_group, 1)
+        hint = QLabel(
+            "Closing the window keeps routes running. Use Exit A2Router to stop the Windows engine."
         )
+        hint.setObjectName("MutedText")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
 
     def save_profile(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -581,12 +813,12 @@ class MainWindow(QMainWindow):
     def refresh(self, manual=False):
         self.submit(lambda: None, persist=False, background=not manual)
 
-    def submit(self, operation, persist=True, background=False):
+    def submit(self, operation, persist=True, background=False, refresh_backend=True):
         if self.exiting:
             return
         if self.busy:
             if not background:
-                self._pending_actions.append((operation, persist))
+                self._pending_actions.append((operation, persist, refresh_backend))
                 for button in self.buttons:
                     button.setEnabled(False)
             return
@@ -605,7 +837,8 @@ class MainWindow(QMainWindow):
                     message = "; ".join(map(str, result))
                 elif isinstance(result, str):
                     message = result
-                self.controller.refresh()
+                if refresh_backend:
+                    self.controller.refresh()
                 if persist and self.state_path:
                     self.controller.save(self.state_path)
             except Exception as exc:  # noqa: BLE001 — display worker failures and keep Qt alive
@@ -653,8 +886,8 @@ class MainWindow(QMainWindow):
             self._pending_actions.clear()
             self._finish_exit()
         elif self._pending_actions:
-            operation, persist = self._pending_actions.popleft()
-            self.submit(operation, persist=persist)
+            operation, persist, refresh_backend = self._pending_actions.popleft()
+            self.submit(operation, persist=persist, refresh_backend=refresh_backend)
 
     @staticmethod
     def _update_tree(tree, rows):
@@ -724,6 +957,7 @@ class MainWindow(QMainWindow):
         widget.verticalScrollBar().setValue(scroll)
 
     def populate(self, snapshot):
+        self.dashboard.populate(snapshot["devices"], snapshot["routes"])
         self.view_devices = {d["id"]: d for d in snapshot["devices"]}
         self.view_routes = {r["id"]: r for r in snapshot["routes"]}
         device_rows, source_rows, destination_rows = [], [], []
@@ -736,7 +970,10 @@ class MainWindow(QMainWindow):
             device_rows.append(
                 (device["id"], [label, device["kind"], classification, device["state"], format_text])
             )
-            (source_rows if device["kind"] == "input" else destination_rows).append((device["id"], label))
+            selector_label = label + (f" · {device['channels']} ch" if device.get("channels") else "")
+            (source_rows if device["kind"] == "input" else destination_rows).append(
+                (device["id"], selector_label)
+            )
         self._update_tree(self.device_tree, device_rows)
         self._update_combo(self.source, source_rows)
         self._update_combo(self.destination, destination_rows)
@@ -831,15 +1068,15 @@ class MainWindow(QMainWindow):
                             device["id"],
                             [
                                 device["name"],
-                                f"{device['kind']} / {device['channels'] or '?'} ch",
+                                device["kind"],
+                                f"{device['channels'] or '?'} ch · {device['sample_rate'] or '?'} Hz · {device['sample_format'] or '?'}",
                                 device["state"],
-                                device["id"],
                             ],
                         )
                     )
             present = bool(virtual_rows)
             self.vbcable_status.setText(
-                "Ready · Send apps to CABLE Input; route CABLE Output here."
+                "VB-CABLE connected"
                 if present
                 else "Click Create output to install VB-CABLE. Administrator approval is required."
             )
@@ -854,7 +1091,22 @@ class MainWindow(QMainWindow):
                 )
                 if alias:
                     self.virtual_name.setText(alias)
-            self.install_cable_button.setText("Save display name" if present else "Create output")
+            self.virtual_name.setVisible(not present)
+            self.install_cable_button.setVisible(not present)
+            self.install_cable_button.setText("Add VB-CABLE")
+            previous_endpoint = self.cable_endpoint.currentData()
+            self._update_combo(
+                self.cable_endpoint,
+                [
+                    (ident, self.view_devices[ident]["name"] + " · " + self.view_devices[ident]["kind"])
+                    for ident, _ in virtual_rows
+                ],
+            )
+            if previous_endpoint != self.cable_endpoint.currentData():
+                self._cable_selection_changed()
+            else:
+                self._load_format_choices()
+            self._format_rate_changed()
             self.install_cable_button.setEnabled(
                 bool(self.install_cable_button.property("capable"))
                 and not (self.busy and not self._background)
@@ -883,6 +1135,9 @@ class MainWindow(QMainWindow):
 
     def exit_application(self):
         self.timer.stop()
+        self.meter_timer.stop()
+        for card in self.dashboard.cards.values():
+            card.volume_timer.stop()
         if self.subscription:
             self.event_timer.stop()
             self.subscription.terminate()

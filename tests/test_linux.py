@@ -226,3 +226,30 @@ def test_rollback_verifies_exact_request_when_server_loses_property_tags(server,
     with pytest.raises(BackendError, match="rolled back"):
         backend.create_virtual_device(VirtualDevice("parser failure"))
     assert not server.modules and not backend.virtual_devices
+
+
+def test_device_master_controls_use_native_server_commands(server):
+    server.sinks[0]["volume"] = {"front-left": {"value": 49152}, "front-right": {"value": 49152}}
+    server.sinks[0]["mute"] = False
+    calls = []
+
+    def runner(args):
+        if args[0] == "set-sink-volume":
+            calls.append(args)
+            value = round(int(args[2].removesuffix("%")) / 100 * 65536)
+            server.sinks[0]["volume"] = {"front-left": {"value": value}, "front-right": {"value": value}}
+            return ""
+        if args[0] == "set-source-mute":
+            calls.append(args)
+            server.sources[1]["mute"] = args[2] == "1"
+            return ""
+        return server(args)
+
+    backend = PipeWireBackend(runner)
+    backend.refresh()
+    assert backend.get_device("sink:sink").properties["controls"]["volume"] == 0.75
+    backend.set_device_volume("sink:sink", 0.4)
+    backend.set_device_mute("source:mic", True)
+    assert calls == [["set-sink-volume", "sink", "40%"], ["set-source-mute", "mic", "1"]]
+    assert backend.get_device("source:mic").properties["controls"]["muted"] is True
+    assert not backend.capabilities()["meters"]

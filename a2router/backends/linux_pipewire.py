@@ -32,6 +32,9 @@ class PipeWireBackend(AudioBackend):
         self.sink_inputs = []
         self.source_outputs = []
 
+    def capabilities(self):
+        return {**super().capabilities(), "device_controls": True, "meters": False}
+
     @staticmethod
     def _run(args):
         try:
@@ -123,6 +126,18 @@ class PipeWireBackend(AudioBackend):
                         "ports": row.get("ports", []),
                         "active_port": row.get("active_port"),
                         "reported_formats": row.get("formats", []),
+                        "controls": {
+                            "volume_available": bool(row.get("volume")),
+                            "volume": min(
+                                1.0,
+                                max(
+                                    (v.get("value", 0) / 65536 for v in row.get("volume", {}).values()),
+                                    default=0,
+                                ),
+                            ),
+                            "muted": row.get("mute", False),
+                            "peak_available": False,
+                        },
                     },
                 )
         modules = self._modules()
@@ -384,3 +399,19 @@ class PipeWireBackend(AudioBackend):
             "monitoring": "GUI subscribes to pactl events with 250 ms debounce; 3 second polling fallback",
             "latency": "pactl device latency values are reported in microseconds; end-to-end latency is unknown",
         }
+
+    def set_device_volume(self, device_id, volume):
+        if type(volume) not in (int, float) or not 0 <= volume <= 1:
+            raise BackendError("Volume must be between 0 and 1")
+        device = self.get_device(device_id)
+        command = "set-sink-volume" if device.kind == "output" else "set-source-volume"
+        self.runner([command, device_id.split(":", 1)[1], f"{round(volume * 100)}%"])
+        self.refresh()
+
+    def set_device_mute(self, device_id, muted):
+        if type(muted) is not bool:
+            raise BackendError("Mute must be a boolean")
+        device = self.get_device(device_id)
+        command = "set-sink-mute" if device.kind == "output" else "set-source-mute"
+        self.runner([command, device_id.split(":", 1)[1], "1" if muted else "0"])
+        self.refresh()

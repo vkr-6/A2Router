@@ -92,10 +92,9 @@ if (Test-Path "$Workspace\dist") { Remove-Item "$Workspace\dist" -Recurse -Force
 New-Item -ItemType Directory -Force "$Workspace\dist" | Out-Null
 & $python tools/windows/make_icon.py a2router/assets/a2router.svg "$Workspace/build/a2router.ico"
 if ($LASTEXITCODE) { throw 'Application icon generation failed' }
-foreach ($entry in @(@('a2router','--windowed'), @('a2router-cli','--console'))) {
-    & $python -m PyInstaller --noconfirm --clean --onefile $entry[1] --name $entry[0] --icon "$Workspace/build/a2router.ico" --hidden-import PySide6.QtSvg --add-data "$Workspace/a2router/assets;a2router/assets" --paths $Workspace --add-binary "$native\a2router_wasapi.dll;." --distpath "$Workspace\dist" --workpath "$Workspace\build\pyinstaller" --specpath "$Workspace\build" tools\windows\portable_entry.py
-    if ($LASTEXITCODE) { throw "Freezing failed: $($entry[0])" }
-}
+& $python -m PyInstaller --noconfirm --clean --onefile --windowed --name a2router --icon "$Workspace/build/a2router.ico" --hidden-import PySide6.QtSvg --add-data "$Workspace/a2router/assets;a2router/assets" --paths $Workspace --add-binary "$native\a2router_wasapi.dll;." --distpath "$Workspace\dist" --workpath "$Workspace\build\pyinstaller" --specpath "$Workspace\build" tools\windows\portable_entry.py
+if ($LASTEXITCODE) { throw 'Freezing the GUI application failed' }
+
 if (!$SkipTests) {
     # These checks only enumerate endpoints; they never install drivers or play audio.
     $env:QT_QPA_PLATFORM = 'offscreen'
@@ -103,12 +102,6 @@ if (!$SkipTests) {
     if ($Headless) { $smokeArguments += ' --mock' }
     $p = Start-Process "$Workspace\dist\a2router.exe" -ArgumentList $smokeArguments -Wait -PassThru
     if ($p.ExitCode) { throw "Packaged GUI smoke check failed: $($p.ExitCode)" }
-    if ($Headless) {
-        & "$Workspace\dist\a2router-cli.exe" --mock diagnostics | Set-Content "$Workspace\dist\diagnostics.json"
-    } else {
-        & "$Workspace\dist\a2router-cli.exe" diagnostics | Set-Content "$Workspace\dist\diagnostics.json"
-    }
-    if ($LASTEXITCODE) { throw 'Packaged diagnostics failed' }
     if (!$Headless) {
         Remove-Item Env:\QT_QPA_PLATFORM -ErrorAction SilentlyContinue
         $p = Start-Process "$Workspace\dist\a2router.exe" -ArgumentList ('--self-test "' + $Workspace + '\dist\packaged-desktop-smoke.json"') -Wait -PassThru
@@ -128,13 +121,6 @@ $out = "$source\dist\windows-x64"
 if (Test-Path $out) { Remove-Item $out -Recurse -Force }
 New-Item -ItemType Directory -Force $out | Out-Null
 Copy-Item "$Workspace\dist\*" $out -Recurse -Force
-$nativeOut = "$source\dist\windows-native"
-if (Test-Path $nativeOut) { Remove-Item $nativeOut -Recurse -Force }
-New-Item -ItemType Directory -Force $nativeOut | Out-Null
-Copy-Item "$native\a2router_wasapi.dll", "$native\a2router_cli.exe" $nativeOut -Force
-foreach ($name in @('a2router_core_test.exe','a2router_wasapi_probe.exe')) {
-    if (Test-Path "$native\$name") { Copy-Item "$native\$name" $nativeOut -Force }
-}
-Get-FileHash "$out\a2router.exe", "$out\a2router-cli.exe" -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $([IO.Path]::GetFileName($_.Path))" } | Set-Content "$out\SHA256SUMS.txt" -Encoding ascii
+Get-FileHash "$out\a2router.exe" -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $([IO.Path]::GetFileName($_.Path))" } | Set-Content "$out\SHA256SUMS.txt" -Encoding ascii
 Compress-Archive -Path "$out\*" -DestinationPath "$source\dist\a2router-windows-x64.zip" -Force
 Write-Host "Portable Windows artifacts: $out"

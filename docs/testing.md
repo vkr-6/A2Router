@@ -58,3 +58,7 @@ That test creates private servers and temporary virtual endpoints; it does not v
 ## Optional channel routing
 
 Run `ctest` for float identity, swaps, duplication, unmapped silence, summing/clipping and PCM16/24/32 decoding tests. Python tests validate matrix shapes/gains, ABI serialization, disabled/reenabled routes, profile restoration and no-restart polling. These checks do not verify WASAPI output formats on a real Windows endpoint. On a suitable target, use a low-level stereo signal to check channel order, duplication, gain and clipping telemetry. No driver installation should be needed if VB-CABLE is already present.
+
+## Endpoint configuration and main-page controls
+
+Simulated tests cover adapter branding classification, 16-channel format selection, source/destination editor refresh, master-volume/mute calls without source restarts, exact-format membership, active-route guards, system renaming, graph history/availability and device filters. The Windows bridge build check requires all new exports. On a separate suitable target, verify actual name changes in another application and exact device/default/mix formats after Apply; test both playback and recording sides. This session does not install or change Windows devices.

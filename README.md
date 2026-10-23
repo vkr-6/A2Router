@@ -13,9 +13,25 @@ A compact desktop application for routing audio from multiple sources to multipl
 - Windows: reuse MultiRoute's WASAPI engine for input capture and output loopbacks, with native drift compensation and telemetry.
 - Windows uses the original VB-CABLE base package, installed only when you click **Create output** in **Virtual devices**. The application itself remains portable.
 - Optional Windows channel routing: explicit channel remapping, duplication and summing, with per-connection gain and clipping protection in C++. Standard device routes retain the original WASAPI processing path.
-- Compact native Qt controls, a new routing logo, live delay adjustment and stable refresh that preserves selection and unapplied edits.
+- A redesigned **Audio** main page with a device mixer, measured peak-history graphs, master volume/mute, device filtering and route status. Sidebar navigation keeps routing, virtual endpoints, synchronization and settings separate.
+- Windows virtual endpoint configuration: exact format probing, channel count, bit depth/sample rate, PCM data rate and real Windows endpoint renaming. Advanced controls report failures and verify changes.
+- Live delay adjustment and stable refresh preserve selection, route state and unapplied edits.
 
-**Windows driver operations and the updated WASAPI channel path need target-machine validation.** The base VB-CABLE package supplies one shared cable, not arbitrary named devices. Names entered in A2Router are saved display aliases; Windows endpoint names and speaker layouts are configured through the Windows sound panel. A2Router reads back the actual format. Windows audio signal transport and acoustic alignment are unverified for this revision. See [verification scope](docs/verification.md).
+**Windows driver operations and the updated WASAPI channel path need target-machine validation.** The base VB-CABLE package supplies one shared cable, not arbitrary named devices. The Virtual devices page can rename Windows endpoints and apply driver-supported formats. Format changes use an isolated Windows compatibility interface with verification/rollback; Windows Sound remains a fallback. These native operations require target-machine validation. Windows audio signal transport and acoustic alignment are unverified for this revision. See [verification scope](docs/verification.md).
+
+## Interface
+
+The **Audio** page is the main workspace. Device cards expose master volume and mute, plus 30 seconds of observed Windows endpoint peaks on a −60 to 0 dBFS graph. Meter polls run on the control worker and do not rebuild or restart routes. Missing telemetry is shown as unavailable; no waveform data is simulated in the real backend. PipeWire volume/mute are supported through `pactl`; live Linux peak capture is not implemented.
+
+![Audio main page](docs/images/audio.png)
+
+*Preview captured from the actual Qt application with a labelled simulated backend; no audio hardware validation is implied.*
+
+![Virtual endpoint configuration](docs/images/virtual-devices.png)
+
+*Configuration preview uses simulated Windows endpoints. The 16-channel choice is a tested UI path, not proof that a particular driver accepted a real change.*
+
+The interface uses compact device strips and clear function separation inspired by established utilities such as [EarTrumpet](https://eartrumpet.app/) and [RME TotalMix FX](https://rme-audio.de/totalmix-fx.html). The layout, assets and implementation are A2Router's own; it has no effects or controls that the backend cannot implement.
 
 ## Build with GitHub Actions
 
@@ -23,14 +39,13 @@ Push this source tree to your repository. The [A2Router build workflow](.github/
 
 | Job | Output / checks |
 |---|---|
-| Windows x64 portable application | Builds the native engine/bridge, checks the ABI, packages GUI/CLI EXEs with the icon and VB-CABLE payload, and runs labelled simulated startup tests |
+| Windows x64 portable application | Builds the native engine/bridge, checks the ABI, packages one GUI EXE with the icon, theme and VB-CABLE payload, and runs labelled simulated startup tests |
 | Linux | Python lint/format checks, Python and native tests, isolated real PipeWire integration |
 
 After a successful run, download from the run's **Artifacts** section:
 
-- **A2Router-windows-x64**: portable GUI/CLI, checksums, runtime notices and build reports. Launch `a2router.exe` after extracting.
+- **A2Router-windows-x64**: portable GUI application, checksums, runtime notices and build reports. Launch `a2router.exe` after extracting.
 - **A2Router-windows-x64-zip**: the same portable application in a distributable ZIP.
-- **A2Router-windows-native**: WASAPI DLL, native CLI and diagnostic tools.
 
 Hosted Windows runners use the simulated backend for packaged GUI checks and load the actual DLL to verify its ABI. Endpoint-dependent tests are skipped there; local non-headless builds can run endpoint discovery checks. Hosted runners do not prove real speaker playback, microphone capture quality or acoustic synchronization. The workflow does not install drivers, enable test signing, change audio defaults, or publish a release. The updated workflow has not been dispatched during source preparation.
 
@@ -87,11 +102,12 @@ Outputs are `dist/windows-x64/` and `dist/a2router-windows-x64.zip`. The script 
 ### Virtual output: install on demand
 
 1. Extract the complete portable ZIP and launch `a2router.exe`. Starting the app, refreshing devices and restoring profiles never install a driver.
-2. Open **Virtual devices**, enter a display name and click **Create output**. Windows requests administrator approval only if installation is needed. An existing healthy cable is reused.
+2. Open **Virtual devices**. An existing cable appears automatically, identified through its audio-adapter topology or original VB-Audio adapter branding. **Add VB-CABLE** is offered only when absent; Windows requests administrator approval for that explicit installation. Starting A2Router never installs a driver.
 3. A2Router waits for the original vendor installer, verifies PnP status and refreshes active audio endpoints automatically. A ready endpoint is usable immediately. If Windows reports a restart pending, or no endpoint becomes active, the app reports the restart requirement; it never restarts your computer automatically.
-4. Use **Configure channels / Windows name…** to open Windows Sound. Select the cable playback endpoint, use **Configure** for available speaker layouts and **Properties → Advanced** for formats. Use Properties to change its Windows name. A2Router's name field is a local display alias, not a system rename. Polling reads back the applied configuration; unsupported channel counts are not invented.
-5. Send applications to **CABLE Input**; route **CABLE Output** to one or more physical outputs in A2Router. **CABLE In 16 Ch**, when present, belongs to the same cable. Feedback to either playback alternative is blocked.
-6. To uninstall the driver, remove its routes and choose **Remove driver…** in Virtual devices. Confirm explicitly: this affects every application using VB-CABLE. Removal may require a restart. To remove A2Router itself, exit it and delete its portable folder; saved settings are in `%APPDATA%\a2router`.
+4. Select the playback **or recording** endpoint in **Endpoint configuration**, then **Scan formats**. Only exact driver-accepted formats are offered. Choose a channel count (including 2, 6, 8 or 16 when reported), bit depth and sample rate, then **Apply format**. Stop managed routes using the endpoint first. Playback and recording formats are separate: configure the recording endpoint too when routing a multichannel cable source. The custom routing editor then exposes all active channels instead of assuming left/right.
+5. **Rename in Windows** changes the selected endpoint's system-visible name while retaining its stable ID and saved routes. The portable application requests elevation if Windows requires administrator access. Older display aliases are removed for that renamed endpoint. **Windows Sound…** remains available if configuration is unsupported on a particular Windows version.
+6. Send applications to **CABLE Input**; route **CABLE Output** to one or more physical outputs in A2Router. **CABLE In 16 Ch**, when present, belongs to the same cable. Feedback to either playback alternative is blocked.
+7. To uninstall the driver, remove its routes and choose **Remove driver…** in Virtual devices. Confirm explicitly: this affects every application using VB-CABLE. Removal may require a restart. To remove A2Router itself, exit it and delete its portable folder; saved settings are in `%APPDATA%\a2router`.
 
 Keep the `vendor` folder beside the EXEs. Package extraction checks the pinned original ZIP hash; driver operations check the vendor installer's Authenticode signature. No custom WDK driver, Inno setup EXE, test-signing configuration or automatic driver installation is used. Windows itself may change default audio devices during driver installation; review Sound settings. A2Router does not explicitly set defaults.
 
@@ -111,7 +127,7 @@ Periodic refresh updates changed cells in place, preserving selections and scrol
 
 See [Windows details](docs/windows.md) and [clean-machine testing](docs/testing.md).
 
-## Commands and lifecycle
+## Source diagnostics and lifecycle
 
 ```bash
 python -m a2router diagnostics
@@ -128,7 +144,7 @@ python -m a2router save studio.json
 python -m a2router load studio.json
 ```
 
-Use device IDs returned by `devices`. Read-only diagnostics do not activate saved routes. `python -m a2router --mock gui` uses a clearly labelled simulation and separate state. Windows CLI processes cannot sustain routing after exit; use the GUI.
+The distributed portable build contains only `a2router.exe`; no separate CLI or native console artifacts are shipped. The following source diagnostics remain available to developers. Use device IDs returned by `devices`. Read-only diagnostics do not activate saved routes. `python -m a2router --mock gui` uses a clearly labelled simulation and separate state. Windows CLI processes cannot sustain routing after exit; use the GUI.
 
 Closing the window hides/minimizes it. **Exit controller** leaves Linux server resources running but stops Windows processing. **Stop all managed routes** explicitly disables routes. Configuration restoration creates managed virtual devices before dependent routes; missing endpoints remain pending. Default speakers/microphones are not explicitly changed by the application.
 

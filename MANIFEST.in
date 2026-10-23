@@ -3,7 +3,7 @@ recursive-include src *.cpp *.h
 recursive-include drivers/windows *.md
 recursive-include tools *.py *.ps1 *.bat *.yml *.txt
 recursive-include tests *.py *.cpp
-recursive-include docs *.md
+recursive-include docs *.md *.png
 recursive-include .github/workflows *.yml
 recursive-include vendor/vbcable *.zip *.txt
-recursive-include a2router/assets *.svg
+recursive-include a2router/assets *.svg *.qss

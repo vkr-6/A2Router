@@ -38,13 +38,6 @@ jobs:
           path: dist/a2router-windows-x64.zip
           if-no-files-found: error
           retention-days: 14
-      - name: Upload native tools
-        uses: actions/upload-artifact@v4
-        with:
-          name: A2Router-windows-native
-          path: dist/windows-native/
-          if-no-files-found: error
-          retention-days: 14
 
   linux:
     name: Linux source checks and private PipeWire tests

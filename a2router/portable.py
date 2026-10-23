@@ -80,6 +80,22 @@ def main(argv=None):
             if sys.stderr is None:
                 stack.enter_context(redirect_stderr(log))
         try:
+            if args and args[0] == "--rename-endpoint":
+                # Internal elevated operation, not a distributed console program.
+                # Never load a profile or install a driver in this child process.
+                if len(args) != 3 or sys.platform != "win32":
+                    raise ValueError("Invalid endpoint rename request")
+                from a2router.backends.windows import WindowsBackend
+
+                backend = WindowsBackend()
+                try:
+                    if not backend.bridge or not hasattr(backend.bridge, "ar_rename_device"):
+                        raise ValueError("Native rename API unavailable")
+                    if not backend.bridge.ar_rename_device(args[1], args[2]):
+                        raise ValueError(backend._error())
+                    return 0
+                finally:
+                    backend.close()
             if args and args[0] == "--self-test":
                 if len(args) not in (2, 3) or (len(args) == 3 and args[2] != "--mock"):
                     raise ValueError("Usage: --self-test REPORT.json [--mock]")

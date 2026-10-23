@@ -272,3 +272,87 @@ def test_omitting_source_channels_requires_confirmation(app, monkeypatch):
         assert len(backend.list_routes()[0].channel_map) == 1
     finally:
         shutdown(app, window)
+
+
+def test_dashboard_master_controls_and_missing_peak_are_honest(app):
+    backend = MockBackend()
+    window = MainWindow(Controller(backend))
+    try:
+        wait(app, window)
+        assert window.navigation.item(0).text() == "Audio"
+        assert window.header_title.text() == "Audio"
+        assert not window.menuBar().actions()
+        card = window.dashboard.cards["speakers"]
+        assert len(window.dashboard.cards) == 3
+        assert not card.graph.samples
+        card.volume.setValue(35)
+        deadline = time.monotonic() + 2
+        while (
+            time.monotonic() < deadline
+            and backend.devices["speakers"].properties["controls"]["volume"] != 0.35
+        ):
+            app.processEvents()
+            time.sleep(0.01)
+        wait(app, window)
+        assert backend.devices["speakers"].properties["controls"]["volume"] == 0.35
+        card.mute.click()
+        wait(app, window)
+        assert backend.devices["speakers"].properties["controls"]["muted"]
+    finally:
+        shutdown(app, window)
+
+
+def test_virtual_tab_shows_existing_cable_and_configures_capture_16_channels(app):
+    from test_device_controls import ConfigurationBridge
+
+    from a2router.backends.windows import WindowsBackend
+
+    backend = WindowsBackend(ConfigurationBridge())
+    window = MainWindow(Controller(backend))
+    try:
+        wait(app, window)
+        assert window.virtual_tree.topLevelItemCount() == 3
+        assert window.cable_endpoint.count() == 3
+        window.cable_endpoint.setCurrentIndex(window.cable_endpoint.findData("cable-out"))
+        window.scan_formats_button.click()
+        wait(app, window)
+        assert window.channel_choice.findData(16) >= 0
+        window.channel_choice.setCurrentIndex(window.channel_choice.findData(16))
+        assert "24.576" in window.format_data_rate.text()
+        window.apply_format_button.click()
+        wait(app, window)
+        assert backend.get_device("cable-out").channels == 16
+        window.source.setCurrentIndex(window.source.findData("cable-out"))
+        window.destination.setCurrentIndex(window.destination.findData("cable-16"))
+        window.channel_group.setChecked(True)
+        assert window.channel_table.cellWidget(0, 0).count() == 16
+        window.endpoint_name.setText("Applications")
+        window.rename_button.click()
+        wait(app, window)
+        assert backend.get_device("cable-out").name == "Applications"
+    finally:
+        shutdown(app, window)
+
+
+def test_main_audio_filter_preserves_cards_and_peak_history(app):
+    backend = MockBackend()
+    window = MainWindow(Controller(backend))
+    try:
+        wait(app, window)
+        card = window.dashboard.cards["speakers"]
+        card.graph.observe(1.0, 0.25)
+        card.graph.observe(1.0, 0.25)
+        card.graph.observe(1.25, 0.5)
+        assert len(card.graph.samples) == 2
+        assert card.graph.available
+        card.graph.observe(1.5, None)
+        assert not card.graph.available
+        window.dashboard.filter_kind.setCurrentText("Inputs")
+        assert window.dashboard.card_order == ["mic"]
+        window.dashboard.filter_kind.setCurrentText("All devices")
+        window.dashboard.search.setText("speakers")
+        assert window.dashboard.card_order == ["speakers"]
+        assert window.dashboard.cards["speakers"] is card
+        assert window.dashboard.counters["outputs"].text() == "2"
+    finally:
+        shutdown(app, window)

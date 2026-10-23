@@ -28,9 +28,17 @@ class MockBackend(AudioBackend):
             monitor_of="speakers",
         )
         self.resources = set()
+        for device in self.devices.values():
+            if not device.monitor_of:
+                device.properties["controls"] = {
+                    "volume_available": True,
+                    "volume": 0.75,
+                    "muted": False,
+                    "peak_available": False,
+                }
 
     def capabilities(self):
-        return {**super().capabilities(), "channel_routing": True}
+        return {**super().capabilities(), "channel_routing": True, "device_controls": True}
 
     def refresh(self, reconcile=True):
         if not reconcile:
@@ -79,3 +87,13 @@ class MockBackend(AudioBackend):
     def _remove_virtual(self, config):
         self.devices.pop(config.device_id, None)
         self.devices.pop("source:" + config.device_id.removeprefix("sink:") + ".monitor", None)
+
+    def set_device_volume(self, device_id, volume):
+        from a2router.models import BackendError
+
+        if type(volume) not in (int, float) or not 0 <= volume <= 1:
+            raise BackendError("Invalid volume")
+        self.get_device(device_id).properties["controls"]["volume"] = volume
+
+    def set_device_mute(self, device_id, muted):
+        self.get_device(device_id).properties["controls"]["muted"] = bool(muted)

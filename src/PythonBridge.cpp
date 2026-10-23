@@ -16,6 +16,7 @@
 #include <mutex>
 #include <sstream>
 #include <thread>
+#include "WindowsEndpointControl.h"
 
 using Microsoft::WRL::ComPtr;
 namespace {
@@ -60,7 +61,7 @@ std::wstring friendlyName(IMMDevice* device) {
         name = value.pwszVal;
     PropVariantClear(&value); return name;
 }
-std::string vbCableInstance(IMMDevice* device) {
+std::string cableServiceInstance(IMMDevice* device) {
     ComPtr<IPropertyStore> properties;
     if (FAILED(device->OpenPropertyStore(STGM_READ, &properties))) return {};
     PROPVARIANT value; PropVariantInit(&value);
@@ -83,11 +84,59 @@ std::string vbCableInstance(IMMDevice* device) {
     }
     return {};
 }
+// MMDevice software endpoint parents do not necessarily lead to the audio
+// adapter. Follow the documented topology connector to the hardware device.
+std::string vbCableInstance(IMMDevice* device) {
+    auto instance = cableServiceInstance(device);
+    if (!instance.empty()) return instance;
+    ComPtr<IDeviceTopology> topology;
+    if (SUCCEEDED(device->Activate(__uuidof(IDeviceTopology), CLSCTX_ALL, nullptr,
+            reinterpret_cast<void**>(topology.GetAddressOf())))) {
+        ComPtr<IConnector> connector;
+        LPWSTR connectedId = nullptr;
+        if (SUCCEEDED(topology->GetConnector(0, &connector)) &&
+            SUCCEEDED(connector->GetDeviceIdConnectedTo(&connectedId))) {
+            auto adapter = a2r::endpoint(connectedId);
+            CoTaskMemFree(connectedId);
+            if (adapter) instance = cableServiceInstance(adapter.Get());
+        }
+    }
+    return instance;
+}
+std::wstring interfaceName(IMMDevice* device) {
+    ComPtr<IPropertyStore> properties;
+    PROPVARIANT value; PropVariantInit(&value);
+    std::wstring name;
+    if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, &properties)) &&
+        SUCCEEDED(properties->GetValue(PKEY_DeviceInterface_FriendlyName, &value)) &&
+        value.vt == VT_LPWSTR && value.pwszVal) name = value.pwszVal;
+    PropVariantClear(&value); return name;
+}
 void writeDevice(std::ostream& out, IMMDevice* device, const std::wstring& name, bool input, bool isDefault) {
     out << "{\"id\":" << quote(utf8(deviceId(device))) << ",\"name\":" << quote(utf8(name))
         << ",\"kind\":" << quote(input ? "input" : "output") << ",\"default\":" << (isDefault ? "true" : "false");
-    const auto cable = vbCableInstance(device);
-    if (!cable.empty()) out << ",\"virtual\":true,\"properties\":{\"virtual_driver\":\"VB-CABLE\",\"feedback_group\":" << quote("vbcable:" + cable) << '}';
+    auto cable = vbCableInstance(device);
+    const auto adapterName = interfaceName(device);
+    // Exact immutable adapter branding is a fallback, never an endpoint-name guess.
+    const bool branded = _wcsicmp(adapterName.c_str(), L"VB-Audio Virtual Cable") == 0 ||
+                         _wcsicmp(adapterName.c_str(), L"VB-Audio Point") == 0;
+    if (cable.empty() && branded) cable = "base";
+    if (!cable.empty()) out << ",\"virtual\":true";
+    out << ",\"properties\":{\"interface_name\":" << quote(utf8(adapterName));
+    if (!cable.empty()) out << ",\"virtual_driver\":\"VB-CABLE\",\"feedback_group\":" << quote("vbcable:base");
+    out << ",\"controls\":"; a2r::controls(out, device);
+    ComPtr<IPropertyStore> deviceProperties;
+    PROPVARIANT configured; PropVariantInit(&configured);
+    if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, &deviceProperties)) &&
+        SUCCEEDED(deviceProperties->GetValue(PKEY_AudioEngine_DeviceFormat, &configured)) &&
+        configured.vt == VT_BLOB && configured.blob.cbSize >= sizeof(WAVEFORMATEX)) {
+        auto* f = reinterpret_cast<const WAVEFORMATEX*>(configured.blob.pBlobData);
+        if (configured.blob.cbSize >= sizeof(WAVEFORMATEX) + f->cbSize) {
+            out << ",\"device_format\":"; a2r::writeFormat(out, f);
+        }
+    }
+    PropVariantClear(&configured);
+    out << '}';
     ComPtr<IAudioClient> client;
     if (SUCCEEDED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
             reinterpret_cast<void**>(client.GetAddressOf())))) {
@@ -316,4 +365,134 @@ API int ar_source_start_matrix(const wchar_t* source, int input, const wchar_t* 
         if (!source || !*source || !ids || !delays || !matrices) { error = "Missing matrix routing arguments"; return 0; }
         return startSession(source, input != 0, ids, delays, matrices) ? 1 : 0;
     } catch (const std::exception& e) { error = e.what(); return 0; }
+}
+
+API const char* ar_controls() {
+    std::lock_guard<std::mutex> lock(apiMutex);
+    try {
+        ComScope scope;
+        if (!scope.usable()) { error = "COM initialization failed"; return nullptr; }
+        ComPtr<IMMDeviceEnumerator> e;
+        if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&e)))) {
+            error = "Cannot enumerate endpoint controls"; return nullptr;
+        }
+        ComPtr<IMMDeviceCollection> devices;
+        if (FAILED(e->EnumAudioEndpoints(eAll, DEVICE_STATE_ACTIVE, &devices))) return nullptr;
+        UINT count = 0; devices->GetCount(&count);
+        std::ostringstream out; out.imbue(std::locale::classic()); out << '['; bool first = true;
+        for (UINT i = 0; i < count; ++i) {
+            ComPtr<IMMDevice> device;
+            if (FAILED(devices->Item(i, &device))) continue;
+            if (!first) out << ','; first = false;
+            out << "{\"id\":" << quote(utf8(deviceId(device.Get()))) << ",\"controls\":";
+            a2r::controls(out, device.Get()); out << '}';
+        }
+        out << ']'; result = out.str(); error.clear(); return result.c_str();
+    } catch (const std::exception& e) { error = e.what(); return nullptr; }
+}
+API int ar_set_device_volume(const wchar_t* id, float level) {
+    std::lock_guard<std::mutex> lock(apiMutex);
+    ComScope scope;
+    ComPtr<IMMDevice> device;
+    if (scope.usable()) device = a2r::endpoint(id);
+    ComPtr<IAudioEndpointVolume> volume;
+    if (!device || !std::isfinite(level) || level < 0 || level > 1 ||
+        FAILED(device->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(volume.GetAddressOf()))) ||
+        FAILED(volume->SetMasterVolumeLevelScalar(level, nullptr))) { error = "Cannot set endpoint volume"; return 0; }
+    error.clear(); return 1;
+}
+API int ar_set_device_mute(const wchar_t* id, int muted) {
+    std::lock_guard<std::mutex> lock(apiMutex);
+    ComScope scope;
+    ComPtr<IMMDevice> device;
+    if (scope.usable()) device = a2r::endpoint(id);
+    ComPtr<IAudioEndpointVolume> volume;
+    if (!device || FAILED(device->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr,
+        reinterpret_cast<void**>(volume.GetAddressOf()))) || FAILED(volume->SetMute(muted != 0, nullptr))) {
+        error = "Cannot set endpoint mute"; return 0;
+    }
+    error.clear(); return 1;
+}
+API const char* ar_device_formats(const wchar_t* id) {
+    std::lock_guard<std::mutex> lock(apiMutex);
+    ComScope scope;
+    ComPtr<IMMDevice> device;
+    if (scope.usable()) device = a2r::endpoint(id);
+    ComPtr<IAudioClient> client;
+    if (!device || FAILED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
+        reinterpret_cast<void**>(client.GetAddressOf())))) { error = "Cannot query device formats"; return nullptr; }
+    std::ostringstream out; out << '['; bool first = true;
+    for (int channels : {1, 2, 4, 6, 8, 16}) for (int rate : {44100, 48000, 88200, 96000, 192000})
+        for (int encoding = 0; encoding < 5; ++encoding) {
+            const int bits = encoding == 0 ? 16 : encoding < 3 ? 24 : 32;
+            const int container = encoding == 0 ? 16 : encoding == 1 ? 24 : 32;
+            auto format = a2r::format(channels, rate, bits, encoding == 4, container);
+            if (client->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, &format.Format, nullptr) == S_OK) {
+                if (!first) out << ','; first = false; a2r::writeFormat(out, &format.Format);
+            }
+        }
+    out << ']'; result = out.str(); error.clear(); return result.c_str();
+}
+API int ar_set_device_format(const wchar_t* id, int channels, int rate, int bits, int floating, int container) {
+    std::lock_guard<std::mutex> lock(apiMutex);
+    if ((channels != 1 && channels != 2 && channels != 4 && channels != 6 && channels != 8 && channels != 16) ||
+        rate < 8000 || rate > 192000 || (bits != 16 && bits != 24 && bits != 32) ||
+        (container != 16 && container != 24 && container != 32) || bits > container ||
+        (floating && (bits != 32 || container != 32))) { error = "Invalid endpoint format"; return 0; }
+    ComScope scope;
+    ComPtr<IMMDevice> device;
+    if (scope.usable()) device = a2r::endpoint(id);
+    ComPtr<IAudioClient> client;
+    if (!device || FAILED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
+        reinterpret_cast<void**>(client.GetAddressOf())))) { error = "Endpoint unavailable"; return 0; }
+    auto format = a2r::format(channels, rate, bits, floating != 0, container);
+    if (client->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, &format.Format, nullptr) != S_OK) {
+        error = "The driver rejected this exact format"; return 0;
+    }
+    auto policy = a2r::policy();
+    if (!policy) { error = "This Windows version does not expose format configuration; use Windows Sound"; return 0; }
+    WAVEFORMATEX* old = nullptr;
+    if (FAILED(policy->GetDeviceFormat(id, 0, &old)) || !old) { CoTaskMemFree(old); error = "Cannot preserve previous endpoint format"; return 0; }
+    const HRESULT applied = policy->SetDeviceFormat(id, &format.Format, nullptr);
+    WAVEFORMATEX* actual = nullptr;
+    const bool verified = SUCCEEDED(applied) && SUCCEEDED(policy->GetDeviceFormat(id, 0, &actual)) && a2r::sameFormat(actual, &format.Format);
+    CoTaskMemFree(actual);
+    if (!verified) {
+        const HRESULT rollback = policy->SetDeviceFormat(id, old, nullptr);
+        WAVEFORMATEX* restoredFormat = nullptr;
+        const bool restored = SUCCEEDED(rollback) && SUCCEEDED(policy->GetDeviceFormat(id, 0, &restoredFormat))
+                              && a2r::sameFormat(old, restoredFormat);
+        CoTaskMemFree(restoredFormat); CoTaskMemFree(old);
+        error = restored ? "Format was rejected or not verified; previous format restored. Close audio apps and retry."
+                         : "Format was not verified and restoring the old format could not be verified; inspect Windows Sound";
+        return 0;
+    }
+    CoTaskMemFree(old); error.clear(); return 1;
+}
+API int ar_rename_device(const wchar_t* id, const wchar_t* name) {
+    std::lock_guard<std::mutex> lock(apiMutex);
+    if (!name || !*name || wcslen(name) > 128) { error = "Invalid endpoint name"; return 0; }
+    ComScope scope;
+    ComPtr<IMMDevice> device;
+    if (scope.usable()) device = a2r::endpoint(id);
+    ComPtr<IPropertyStore> properties;
+    if (!device || FAILED(device->OpenPropertyStore(STGM_READWRITE, &properties))) {
+        error = "Windows requires administrator access to rename this endpoint"; return 0;
+    }
+    const auto previous = friendlyName(device.Get());
+    PROPVARIANT value; PropVariantInit(&value); value.vt = VT_LPWSTR; value.pwszVal = const_cast<wchar_t*>(name);
+    if (FAILED(properties->SetValue(PKEY_Device_FriendlyName, value)) || FAILED(properties->Commit())) {
+        value.pwszVal = const_cast<wchar_t*>(previous.c_str());
+        const bool restored = SUCCEEDED(properties->SetValue(PKEY_Device_FriendlyName, value)) &&
+                              SUCCEEDED(properties->Commit()) && friendlyName(device.Get()) == previous;
+        error = restored ? "Windows rejected the endpoint name; previous name retained" : "Endpoint rename failed; previous name could not be verified";
+        return 0;
+    }
+    if (friendlyName(device.Get()) != name) {
+        value.pwszVal = const_cast<wchar_t*>(previous.c_str());
+        const bool restored = SUCCEEDED(properties->SetValue(PKEY_Device_FriendlyName, value)) && SUCCEEDED(properties->Commit());
+        error = restored ? "Endpoint rename was not verified; previous name restored" : "Endpoint rename was not verified and rollback failed";
+        return 0;
+    }
+    error.clear(); return 1;
 }

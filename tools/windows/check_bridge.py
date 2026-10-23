@@ -21,6 +21,16 @@ def main():
         raise SystemExit("Native bridge is missing live delay control")
     if not hasattr(bridge, "ar_source_start_matrix"):
         raise SystemExit("Native bridge is missing channel matrix routing")
+    for name in (
+        "ar_controls",
+        "ar_set_device_volume",
+        "ar_set_device_mute",
+        "ar_device_formats",
+        "ar_set_device_format",
+        "ar_rename_device",
+    ):
+        if not hasattr(bridge, name):
+            raise SystemExit(f"Native bridge is missing {name}")
     print(json.dumps({"native_bridge_api": 2, "vbcable_discovery_api": 1, "delay_export": True}))
 
 

@@ -31,6 +31,7 @@ class WindowsBackend(AudioBackend):
         self.telemetry = {}
         self.active_delays = {}
         self.active_matrices = {}
+        self.format_cache = {}
         self.has_matrix_api = bridge is not None and hasattr(bridge, "ar_source_start_matrix")
         self.has_live_delay_api = bridge is not None and hasattr(bridge, "ar_source_set_delay")
         self.has_delay_api = bridge is not None and hasattr(bridge, "ar_source_start_delays")
@@ -75,6 +76,18 @@ class WindowsBackend(AudioBackend):
                         ctypes.c_wchar_p,
                     ]
                     self.bridge.ar_source_start_matrix.restype = ctypes.c_int
+                signatures = {
+                    "ar_controls": ([], ctypes.c_char_p),
+                    "ar_set_device_volume": ([ctypes.c_wchar_p, ctypes.c_float], ctypes.c_int),
+                    "ar_set_device_mute": ([ctypes.c_wchar_p, ctypes.c_int], ctypes.c_int),
+                    "ar_device_formats": ([ctypes.c_wchar_p], ctypes.c_char_p),
+                    "ar_set_device_format": ([ctypes.c_wchar_p] + [ctypes.c_int] * 5, ctypes.c_int),
+                    "ar_rename_device": ([ctypes.c_wchar_p, ctypes.c_wchar_p], ctypes.c_int),
+                }
+                for name, (arguments, result) in signatures.items():
+                    if hasattr(self.bridge, name):
+                        function = getattr(self.bridge, name)
+                        function.argtypes, function.restype = arguments, result
                 self.bridge.ar_close.argtypes = []
                 self.bridge.ar_close.restype = None
             except (OSError, AttributeError, BackendError) as exc:
@@ -93,6 +106,10 @@ class WindowsBackend(AudioBackend):
             "live_route_delay": self.bridge is not None and self.has_live_delay_api,
             "route_delay": self.bridge is not None and self.has_delay_api,
             "channel_routing": self.bridge is not None and self.has_matrix_api,
+            "device_controls": self.bridge is not None and hasattr(self.bridge, "ar_set_device_volume"),
+            "meters": self.bridge is not None and hasattr(self.bridge, "ar_controls"),
+            "device_configuration": self.bridge is not None and hasattr(self.bridge, "ar_set_device_format"),
+            "device_rename": self.bridge is not None and hasattr(self.bridge, "ar_rename_device"),
             "adjustable_latency": False,
             "synchronization": "Existing per-output WASAPI drift controllers; acoustic alignment unverified",
             "sources": "Active microphone/input endpoints and loopbacks of every active output",
@@ -150,6 +167,7 @@ class WindowsBackend(AudioBackend):
     def refresh(self, reconcile=True):
         if self.bridge is None:
             return
+        enumerated = False
         try:
             data = self.bridge.ar_devices()
             if data is None:
@@ -159,6 +177,22 @@ class WindowsBackend(AudioBackend):
                 ident, name = row.pop("id"), row.pop("name")
                 kind = row.pop("kind")
                 positions = tuple(row.pop("positions", ()))
+                properties = row.setdefault("properties", {})
+                # Classify actual enumerated endpoints using adapter branding,
+                # not a user-editable endpoint name or its position in the list.
+                if properties.get("interface_name", "").casefold() in (
+                    "vb-audio virtual cable",
+                    "vb-audio point",
+                ):
+                    properties.setdefault("virtual_driver", "VB-CABLE")
+                    properties.setdefault("feedback_group", "vbcable:base")
+                    row["virtual"] = True
+                if properties.get("virtual_driver") == "VB-CABLE":
+                    properties["feedback_group"] = "vbcable:base"
+                if ident in self.format_cache:
+                    properties["supported_formats"] = self.format_cache[ident]
+                if properties.get("controls"):
+                    properties["controls"]["observed_at"] = time.monotonic()
                 devices[ident] = Device(ident, name, kind, positions=positions, state="ACTIVE", **row)
                 if kind == "output":
                     monitor_id = "wasapi-loopback:" + ident
@@ -189,8 +223,15 @@ class WindowsBackend(AudioBackend):
                     device.properties["windows_name"] = device.name
                     device.name = self.endpoint_aliases[device.id]
             self.devices, self.last_error = devices, ""
-            self._read_stats()
-            if reconcile:
+            enumerated = True
+            stats_ok = True
+            try:
+                self._read_stats()
+            except (BackendError, ValueError) as exc:
+                stats_ok = False
+                self.telemetry = {}
+                self.last_error = f"Audio telemetry: {exc}"
+            if reconcile and stats_ok:
                 self._apply()
             else:
                 for route in self.routes.values():
@@ -226,7 +267,8 @@ class WindowsBackend(AudioBackend):
                         )
         except (BackendError, ValueError, OSError, KeyError, TypeError) as exc:
             self.last_error = str(exc)
-            self.devices = {}
+            if not enumerated:
+                self.devices = {}
             for route in self.routes.values():
                 route.status, route.error = "error", str(exc)
 
@@ -332,6 +374,139 @@ class WindowsBackend(AudioBackend):
         raise BackendError(
             "VB-CABLE is a shared driver. Use its vendor installer to uninstall it explicitly."
         )
+
+    def poll_controls(self):
+        if not self.bridge or not hasattr(self.bridge, "ar_controls"):
+            return
+        payload = self.bridge.ar_controls()
+        if payload is None:
+            for device in self.devices.values():
+                controls = device.properties.get("controls", {})
+                controls["peak_available"] = False
+            raise BackendError(self._error())
+        for row in json.loads(payload):
+            device = self.devices.get(row["id"])
+            if device:
+                device.properties["controls"] = {**row["controls"], "observed_at": time.monotonic()}
+
+    def set_device_volume(self, device_id, volume):
+        if type(volume) not in (int, float) or not 0 <= volume <= 1:
+            raise BackendError("Volume must be between 0 and 1")
+        self.get_device(device_id)
+        if not self.capabilities()["device_controls"] or not self.bridge.ar_set_device_volume(
+            device_id, volume
+        ):
+            raise BackendError(self._error() if self.bridge else "Device controls unavailable")
+        self.poll_controls()
+
+    def set_device_mute(self, device_id, muted):
+        self.get_device(device_id)
+        if type(muted) is not bool:
+            raise BackendError("Mute must be a boolean")
+        if not self.capabilities()["device_controls"] or not self.bridge.ar_set_device_mute(
+            device_id, int(muted)
+        ):
+            raise BackendError(self._error() if self.bridge else "Device controls unavailable")
+        self.poll_controls()
+
+    def inspect_formats(self, device_id):
+        self.get_device(device_id)
+        if not self.capabilities()["device_configuration"]:
+            raise BackendError("Rebuild the native bridge to configure formats")
+        payload = self.bridge.ar_device_formats(device_id)
+        if payload is None:
+            raise BackendError(self._error())
+        formats = json.loads(payload)
+        for item in formats:
+            self._validate_format(item)
+        self.format_cache[device_id] = formats
+        self.devices[device_id].properties["supported_formats"] = formats
+        return "" if formats else "No exact formats reported by the driver. Use Windows Sound."
+
+    @staticmethod
+    def _validate_format(config):
+        if not isinstance(config, dict) or set(config) != {
+            "channels",
+            "sample_rate",
+            "bits",
+            "container_bits",
+            "encoding",
+        }:
+            raise BackendError("Invalid device format fields")
+        if any(type(config[k]) is not int for k in ("channels", "sample_rate", "bits", "container_bits")):
+            raise BackendError("Format values must be integers")
+        if config["channels"] not in (1, 2, 4, 6, 8, 16) or not 8000 <= config["sample_rate"] <= 192000:
+            raise BackendError("Unsupported channel count or sample rate")
+        if (
+            config["bits"] not in (16, 24, 32)
+            or config["container_bits"] not in (16, 24, 32)
+            or config["bits"] > config["container_bits"]
+        ):
+            raise BackendError("Invalid bit depth")
+        if config["encoding"] not in ("pcm", "float") or (
+            config["encoding"] == "float" and (config["bits"] != 32 or config["container_bits"] != 32)
+        ):
+            raise BackendError("Invalid sample encoding")
+
+    def configure_device_format(self, device_id, config):
+        self._validate_format(config)
+        self.get_device(device_id)
+        if not self.capabilities()["device_configuration"]:
+            raise BackendError("Native device configuration is unavailable")
+        group = self.get_device(device_id).properties.get("feedback_group")
+        dependent = False
+        for route in self.routes.values():
+            if not route.enabled:
+                continue
+            source = self.devices.get(route.source_id)
+            destination = self.devices.get(route.destination_id)
+            if (
+                route.destination_id == device_id
+                or route.source_id == device_id
+                or (source and source.monitor_of == device_id)
+            ):
+                dependent = True
+            if group and any(
+                device and device.properties.get("feedback_group") == group
+                for device in (source, destination)
+            ):
+                dependent = True
+        if dependent:
+            raise BackendError("Stop routes using this endpoint before changing its format")
+        if config not in self.format_cache.get(device_id, []):
+            raise BackendError("Scan formats and select an exact driver-supported format")
+        if not self.bridge.ar_set_device_format(
+            device_id,
+            config["channels"],
+            config["sample_rate"],
+            config["bits"],
+            int(config["encoding"] == "float"),
+            config["container_bits"],
+        ):
+            raise BackendError(self._error())
+        self.refresh()
+        return "Windows endpoint format applied and verified."
+
+    def rename_device(self, device_id, name):
+        if not isinstance(name, str) or not name.strip() or len(name) > 128 or any(ord(c) < 32 for c in name):
+            raise BackendError("Enter a name of 1–128 printable characters")
+        self.get_device(device_id)
+        if not self.capabilities()["device_rename"]:
+            raise BackendError("Native rename unavailable")
+        if not self.bridge.ar_rename_device(device_id, name.strip()):
+            reason = self._error()
+            if "administrator" not in reason.lower() or not getattr(sys, "frozen", False) or os.name != "nt":
+                raise BackendError(reason)
+            code = windows_vbcable._run_elevated(
+                sys.executable, ["--rename-endpoint", device_id, name.strip()], Path(sys.executable).parent
+            )
+            if code:
+                raise BackendError("Endpoint rename was cancelled or rejected by Windows")
+        self.endpoint_aliases.pop(device_id, None)
+        self.refresh()
+        if self.get_device(device_id).name != name.strip():
+            raise BackendError("Windows endpoint name has not updated; refresh and inspect Windows Sound")
+        return "Windows endpoint name updated."
 
     def configure_cable(self, name):
         if self.bridge is None:
