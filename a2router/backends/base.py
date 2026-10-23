@@ -1,5 +1,7 @@
+from copy import deepcopy
 from dataclasses import asdict
 
+from a2router.channels import validate_channel_map
 from a2router.models import LAYOUTS, BackendError, Route, VirtualDevice
 
 
@@ -11,6 +13,7 @@ class AudioBackend:
         self.routes = {}
         self.virtual_devices = {}
         self.last_error = ""
+        self.endpoint_aliases = {}
 
     def capabilities(self):
         return {
@@ -53,8 +56,9 @@ class AudioBackend:
             raise BackendError("Delay must be an integer between 0 and 10000 ms")
         if route.delay_ms and not self.capabilities().get("route_delay", False):
             raise BackendError("This backend does not support additional route delay")
-        if route.channel_map:
-            raise BackendError("Individual-channel routing is not implemented")
+        validate_channel_map(route.channel_map)
+        if route.channel_map and not self.capabilities().get("channel_routing"):
+            raise BackendError("Channel routing is unavailable in this backend")
         if any(
             r.source_id == route.source_id and r.destination_id == route.destination_id and r.id != route.id
             for r in self.routes.values()
@@ -75,7 +79,12 @@ class AudioBackend:
             raise BackendError("Feedback: a sink monitor cannot feed its own sink")
         if not source.monitor_of and dest.virtual is not True and not route.monitoring_confirmed:
             raise BackendError("Microphone/input monitoring requires explicit feedback-risk confirmation")
-        self._validate_layout(source, dest)
+        if route.channel_map:
+            if not source.channels or not dest.channels:
+                raise BackendError("Channel counts are unavailable")
+            validate_channel_map(route.channel_map, source.channels, dest.channels)
+        else:
+            self._validate_layout(source, dest)
 
         # Collapse monitor sources onto their parent sinks and reject cycles,
         # including disabled desired routes which could be enabled later.
@@ -112,11 +121,13 @@ class AudioBackend:
         enabled=True,
         allow_missing=False,
         delay_ms=0,
+        channel_map=None,
     ):
         if not self.capabilities()["routing"]:
             raise BackendError("Routing is unavailable in this backend")
         route = Route(source_id, destination_id, monitoring_confirmed=monitoring_confirmed, enabled=enabled)
         route.delay_ms = delay_ms
+        route.channel_map = deepcopy(channel_map) if channel_map is not None else []
         if route_id:
             route.id = route_id
         if route.id in self.routes:

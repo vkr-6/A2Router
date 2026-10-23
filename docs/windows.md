@@ -1,25 +1,23 @@
-# Windows backend
+# Windows
 
-A2Router preserves MultiRoute's WASAPI engine, native SPSC buffers, per-output drift controllers and telemetry. Python controls native source sessions through a C ABI; audio samples never pass through Python. Inputs and output loopbacks are enumerated with reported active formats. Windows shared-mode mixing/rate conversion can alter samples; bit-perfect transport and acoustic alignment are unverified.
+A2Router is a portable x64 application. Extract the entire ZIP and launch `a2router.exe`; no app installer, Python installation or WDK is needed on the target machine. Build instructions are in the [README](../README.md). GitHub Actions are manual-only and produce GUI, CLI and native artifacts.
 
-## VB-CABLE
+## Virtual cable
 
-Windows virtual audio uses the original VB-Audio base cable package. No custom driver or root-device-creation code remains. See [VB-CABLE setup](../drivers/windows/README.md) for archive provenance, licensing, automatic setup installation, restart and failure behavior. The GUI shows actual cable endpoints and a vendor installer shortcut when its payload is available. It does not pretend this package can create multiple named cables or remove a shared driver automatically.
+The Virtual devices page installs the original VB-CABLE package only after **Create output** is clicked. Existing endpoints are reused. The driver helper checks its Authenticode signature, waits for vendor setup and checks PnP. The backend refreshes until an active endpoint appears. Ready endpoints can be used immediately; pending restart or missing endpoints are reported. No forced restart occurs.
 
-Select CABLE Input in the source application's output settings, then route CABLE Output through A2Router. Native discovery tags the common PnP service; feedback protection treats all playback alternatives on the same cable as one logical endpoint. The recording side uses real input capture, not a fabricated monitor.
+One base cable is included. Its playback alternatives share the same transport; A2Router never pretends they are independent named cables. The name field creates a persisted A2Router display alias. **Configure channels / Windows name…** opens Windows Sound, which controls the actual system name, speaker layout and default format. A2Router displays the reported result instead of writing undocumented endpoint policy/registry settings.
 
-## Synchronization
+**Remove driver…** requires confirmation and removal of dependent routes. It invokes the original vendor uninstaller, verifies removal/pending restart and reports failure. Removing the portable application folder does not uninstall the shared driver. No driver operation runs on startup, refresh, profile restoration, tests or CI.
 
-The Synchronization page retains per-route edits until Apply or Discard, including through periodic refresh and focus changes. Supported live changes call `AudioEngine::setDeviceDelay` through `ar_source_set_delay`; this does not restart the capture source. The engine validates live buffer limits and adjustment-in-flight states. On rejection, the current setting remains unchanged. A source restart fallback is used only when explicitly allowed; disabled-route settings are saved for the next start. The route-delay cache is updated after successful live requests so polling does not restart the session.
+## Routing and synchronization
 
-Readable telemetry reports buffer fill/target in milliseconds using native block alignment/sample rate, applied rate correction and underruns. Pending, buffering and adjusting states are distinct. Clock drift compensation remains automatic. A fixed delay does not synchronize independent hardware clocks or establish measured acoustic alignment.
+Each native source owns the existing MultiRoute engine. Standard routes keep the original format path; Windows mixes independent source streams. VB-CABLE recording endpoints are captured as inputs; physical render monitors use loopback. Stable PnP service discovery identifies cable endpoints and feedback groups.
 
-## UI refresh and lifecycle
+Optional channel maps use `{source, destination, gain}` entries with zero-based channel indices and finite linear gains from −4 to +4 in configuration. The GUI exposes −60 to +12 dB. The native immutable sparse matrix decodes float32/PCM16/24/32, accumulates in double precision, duplicates/sums selected channels and clamps output to ±1. Unmapped outputs are silent. The destination's active channel count/mask is used with source-rate float32. Conversion/resampling can occur in shared-mode WASAPI. Unsupported source formats or invalid indices fail explicitly. Native callbacks allocate no buffers or matrices per audio block.
 
-Discovery/polling runs in the serialized backend worker. Device, route and synchronization rows are updated in place by stable ID; unchanged snapshots do not clear widgets or reset scroll/selection. Polling does not disable buttons or flash a status message. User actions arriving during a poll are queued. Backend faults remain visible.
+The per-output FIFO and drift controllers retain source-format units, including on mapped outputs. Synchronization shows available buffer/target, rate correction, underruns and clipped-sample counts. Delay drafts persist through polling until Apply/Discard. Supported live delays update the native buffer without a source restart; the restart fallback needs explicit permission. Acoustic alignment and bit-perfect hardware playback are not claimed.
 
-Hiding the window keeps Windows routing alive. Exiting joins the controller and stops its native audio engines. Console invocations cannot sustain audio after their process exits. System defaults and unrelated routes are not explicitly changed by A2Router.
+## Verification
 
-## Build and checks
-
-Build native targets with CMake/MSVC, then use `tools/windows/build-portable.ps1`. The optional setup EXE is compiled with `tools/windows/build-setup.ps1` and Inno Setup 6.3+. GitHub Actions remain manual-only and never install an audio driver on the runner. Headless packaged checks use a labelled mock backend; the actual DLL ABI is separately loaded and checked. Earlier Windows build/discovery checks predate the VB-CABLE and UI revisions; actual installation/playback remain unverified for this revision.
+Linux Qt tests, native matrix sample tests and Windows control/PowerShell simulations were run for this revision. Windows testing used existing Python/PowerShell with tests shared from Linux: no Windows packages, tools or drivers were installed. No Windows compiler was available, so the updated bridge/portable EXE must be built by the manual workflow and tested on a suitable Windows target. Driver install/removal and audible playback were not exercised.

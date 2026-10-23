@@ -10,12 +10,13 @@ VB-Audio's published donationware bundling terms. VB-CABLE remains a separate
 VB-Audio product, with its own copyright and end-user license (readme.txt).
 It is not an A2Router-authored driver. A+B and C+D are not included.
 
-Setup installs the driver by default when absent; you can deselect that task.
-Installation requires administrator approval and a Windows restart. Windows
-may choose new default audio devices after installing a driver: check Sound
-settings after restarting. A2Router does not explicitly change your defaults.
-A2Router uninstall offers shared-driver removal. Pre-existing drivers default
-to keeping; silent uninstall removes it only with /REMOVEVBCABLE=1.
+A2Router stays portable. Driver installation occurs only after Create output in
+Virtual devices. Existing healthy installations are reused. Installation requires
+administrator approval. Ready endpoints can be used immediately; Windows restart
+requirements or unavailable endpoints are reported. Windows may choose new default
+audio devices during driver installation; review Sound settings afterward.
+A2Router does not explicitly set defaults. Remove driver in Virtual devices asks
+for explicit confirmation before shared-driver removal, which may need a restart.
 
 The base package provides one shared cable, not arbitrary named instances.
 Send application playback to CABLE Input and route CABLE Output to speakers

@@ -23,6 +23,7 @@
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <Audioclient.h>
+#include <mmreg.h>
 #include <Functiondiscoverykeys_devpkey.h>
 #include <avrt.h>
 #include <wrl/client.h>
@@ -179,6 +180,9 @@ DeviceBufferSizing computeBufferSizing(int64_t delay_ms, double bytes_per_ms, si
 //------------------------------------------------------------------------------
 struct DeviceRuntime {
     int index = 0;
+    std::unique_ptr<ChannelMatrix> channel_matrix;
+    std::vector<BYTE> matrix_input; // Allocated by the supervisor before audio starts.
+    std::atomic<uint64_t> clipped_samples{0};
     std::wstring endpoint_id;
     std::wstring name;
     int64_t delay_ms = 0;  // startup value only; live value lives in current_delay_ms below
@@ -336,6 +340,7 @@ struct AudioEngine::Impl {
             ds.prebuffering = d->prebuffering.load(std::memory_order_relaxed);
             ds.running = d->running.load(std::memory_order_relaxed);
             ds.faulted = d->faulted.load(std::memory_order_relaxed);
+            ds.clipped_samples = d->clipped_samples.load(std::memory_order_relaxed);
             ds.overflow_count = d->overflow.load(std::memory_order_relaxed);
             ds.partial_underflow_count = d->partial_underflow.load(std::memory_order_relaxed);
             ds.catastrophic_underflow_count =
@@ -589,8 +594,7 @@ void AudioEngine::Impl::renderLoop(DeviceRuntime* dev) {
         BYTE* initial = nullptr;
         hr = renderService->GetBuffer(bufferFrameCount, &initial);
         if (SUCCEEDED(hr)) {
-            memset(initial, 0, static_cast<size_t>(bufferFrameCount) * align);
-            hr = renderService->ReleaseBuffer(bufferFrameCount, 0);
+            hr = renderService->ReleaseBuffer(bufferFrameCount, AUDCLNT_BUFFERFLAGS_SILENT);
             if (FAILED(hr)) {
                 logger.event(LogLevel::Fatal, Event::RenderReleaseFailed, dev->index,
                              static_cast<int64_t>(hr));
@@ -679,6 +683,8 @@ void AudioEngine::Impl::renderLoop(DeviceRuntime* dev) {
             break;
         }
 
+        BYTE* nativeOut = out;
+        if (dev->channel_matrix) out = dev->matrix_input.data();
         const size_t requested = static_cast<size_t>(framesAvailable) * align;
         const size_t currentFill = dev->ring->get_available_read();
 
@@ -739,6 +745,8 @@ void AudioEngine::Impl::renderLoop(DeviceRuntime* dev) {
 
         dev->fill.store(dev->ring->get_available_read(), std::memory_order_relaxed);
 
+        if (dev->channel_matrix)
+            dev->clipped_samples.fetch_add(dev->channel_matrix->process(out, reinterpret_cast<float*>(nativeOut), framesAvailable), std::memory_order_relaxed);
         hr = renderService->ReleaseBuffer(framesAvailable, 0);
         if (FAILED(hr)) {
             logger.event(LogLevel::Fatal, Event::RenderReleaseFailed, dev->index,
@@ -1043,8 +1051,50 @@ std::string AudioEngine::Impl::startLocked(const EngineConfig& cfg) {
                 AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY |
                 AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_RATEADJUST;
 
+            WAVEFORMATEXTENSIBLE mappedFormat{};
+            const WAVEFORMATEX* renderFormat = mixFormat();
+            if (!cfg.outputs[i].channel_map.empty()) {
+                WAVEFORMATEX* destination = nullptr;
+                if (FAILED(dev->client->GetMixFormat(&destination))) return "Cannot query channel-map destination format";
+                std::unique_ptr<WAVEFORMATEX, CoTaskMemDeleter> destinationGuard(destination);
+                if (!destination->nChannels || destination->nChannels > 64) return "Invalid destination channel count";
+                const GUID pcmSubtype = {WAVE_FORMAT_PCM, 0, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
+                const GUID floatSubtype = {WAVE_FORMAT_IEEE_FLOAT, 0, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
+                WORD sourceTag = rawFormat->wFormatTag;
+                WORD validBits = rawFormat->wBitsPerSample;
+                if (sourceTag == WAVE_FORMAT_EXTENSIBLE && rawFormat->cbSize >= 22) {
+                    auto* ext = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(rawFormat);
+                    if (ext->SubFormat != pcmSubtype && ext->SubFormat != floatSubtype)
+                        return "Channel routing requires PCM or float source audio";
+                    sourceTag = static_cast<WORD>(ext->SubFormat.Data1);
+                    validBits = ext->Samples.wValidBitsPerSample;
+                }
+                if (sourceTag != WAVE_FORMAT_PCM && sourceTag != WAVE_FORMAT_IEEE_FLOAT)
+                    return "Channel routing requires PCM or float source audio";
+                if (rawFormat->nBlockAlign != rawFormat->nChannels * (rawFormat->wBitsPerSample / 8))
+                    return "Unsupported packed source format";
+                try {
+                    dev->channel_matrix = std::make_unique<ChannelMatrix>(
+                        PcmEncoding{rawFormat->nChannels, rawFormat->wBitsPerSample, validBits, sourceTag == WAVE_FORMAT_IEEE_FLOAT},
+                        destination->nChannels, cfg.outputs[i].channel_map);
+                } catch (const std::exception& e) { return e.what(); }
+                mappedFormat.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+                mappedFormat.Format.nChannels = destination->nChannels;
+                mappedFormat.Format.nSamplesPerSec = sampleRate;
+                mappedFormat.Format.wBitsPerSample = 32;
+                mappedFormat.Format.nBlockAlign = destination->nChannels * 4;
+                mappedFormat.Format.nAvgBytesPerSec = sampleRate * mappedFormat.Format.nBlockAlign;
+                mappedFormat.Format.cbSize = 22;
+                mappedFormat.Samples.wValidBitsPerSample = 32;
+                mappedFormat.SubFormat = floatSubtype;
+                if (destination->wFormatTag == WAVE_FORMAT_EXTENSIBLE && destination->cbSize >= 22)
+                    mappedFormat.dwChannelMask = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(destination)->dwChannelMask;
+                else if (destination->nChannels == 1) mappedFormat.dwChannelMask = SPEAKER_FRONT_CENTER;
+                else if (destination->nChannels == 2) mappedFormat.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
+                renderFormat = &mappedFormat.Format;
+            }
             hr = dev->client->Initialize(AUDCLNT_SHAREMODE_SHARED, streamFlags, 0, 0,
-                                         mixFormat(), nullptr);
+                                         renderFormat, nullptr);
             if (FAILED(hr)) {
                 logger.event(LogLevel::Warn, Event::DeviceInitFailed, dev->index,
                              static_cast<int64_t>(hr));
@@ -1106,6 +1156,12 @@ std::string AudioEngine::Impl::startLocked(const EngineConfig& cfg) {
             }
 
             try {
+                if (dev->channel_matrix) {
+                    UINT32 frames = 0;
+                    if (FAILED(dev->client->GetBufferSize(&frames)) || !frames)
+                        return "Cannot allocate channel matrix input buffer";
+                    dev->matrix_input.resize(static_cast<size_t>(frames) * blockAlign);
+                }
                 const DeviceBufferSizing sizing = computeBufferSizing(
                     dev->delay_ms, bytesPerMs, blockAlign, cushionBytes, bytesPerSecond);
 

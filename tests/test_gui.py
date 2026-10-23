@@ -193,3 +193,82 @@ def test_sync_metrics_are_native_values_and_update_in_place(app):
         assert window.sync.topLevelItem(0) is item
     finally:
         shutdown(app, window)
+
+
+def test_channel_editor_is_optional_and_keeps_edits_through_poll(app):
+    backend = MockBackend()
+    window = MainWindow(Controller(backend))
+    try:
+        wait(app, window)
+        window.source.setCurrentIndex(window.source.findData("mic"))
+        window.destination.setCurrentIndex(window.destination.findData("headphones"))
+        assert not window.channel_group.isChecked()
+        assert window.channel_table.rowCount() == 2
+        window.channel_group.setChecked(True)
+        window.channel_table.cellWidget(0, 1).setCurrentIndex(1)
+        window.channel_table.cellWidget(1, 1).setCurrentIndex(0)
+        window.channel_table.cellWidget(1, 2).setValue(-6)
+        window.refresh()
+        wait(app, window)
+        assert window.channel_table.cellWidget(0, 1).currentData() == 1
+        assert window.channel_table.cellWidget(1, 2).value() == -6
+        window.monitor_confirm.setChecked(True)
+        window.add_route_button.click()
+        wait(app, window)
+        route = backend.list_routes()[0]
+        assert route.channel_map[0] == {"source": 0, "destination": 1, "gain": 1.0}
+        assert route.channel_map[1]["gain"] == pytest.approx(0.501187, abs=1e-6)
+        assert "Custom" in window.route_tree.topLevelItem(0).text(4)
+        assert not window.windowIcon().isNull()
+    finally:
+        shutdown(app, window)
+
+
+def test_cable_tab_never_installs_on_start_or_refresh(app, monkeypatch):
+    from test_windows import CableBridge
+
+    from a2router.backends.windows import WindowsBackend
+
+    backend = WindowsBackend(CableBridge())
+    calls = []
+    monkeypatch.setattr(backend, "configure_cable", lambda name: calls.append(name))
+    window = MainWindow(Controller(backend))
+    try:
+        wait(app, window)
+        window.refresh()
+        wait(app, window)
+        assert calls == []
+        window.virtual_name.setText("Applications")
+        # Source checkout has no extracted payload. Enable the control only for
+        # this simulated action; no installer exists in this test.
+        window.install_cable_button.setProperty("capable", True)
+        window.install_cable_button.setEnabled(True)
+        window.install_cable_button.click()
+        wait(app, window)
+        assert calls == ["Applications"]
+        assert not backend.virtual_devices
+    finally:
+        shutdown(app, window)
+
+
+def test_omitting_source_channels_requires_confirmation(app, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    backend = MockBackend()
+    window = MainWindow(Controller(backend))
+    try:
+        wait(app, window)
+        window.source.setCurrentIndex(window.source.findData("mic"))
+        window.destination.setCurrentIndex(window.destination.findData("headphones"))
+        window.channel_group.setChecked(True)
+        window.channel_table.setRowCount(1)
+        window.monitor_confirm.setChecked(True)
+        monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.No)
+        window.add_route()
+        assert backend.list_routes() == []
+        monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
+        window.add_route()
+        wait(app, window)
+        assert len(backend.list_routes()[0].channel_map) == 1
+    finally:
+        shutdown(app, window)

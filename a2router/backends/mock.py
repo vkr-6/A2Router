@@ -29,6 +29,9 @@ class MockBackend(AudioBackend):
         )
         self.resources = set()
 
+    def capabilities(self):
+        return {**super().capabilities(), "channel_routing": True}
+
     def refresh(self, reconcile=True):
         if not reconcile:
             for route in self.routes.values():

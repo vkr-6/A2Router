@@ -124,7 +124,7 @@ void writeDevice(std::ostream& out, IMMDevice* device, const std::wstring& name,
     }
     out << '}';
 }
-bool startSession(const std::wstring& source, bool input, const wchar_t* ids, const wchar_t* delayList = nullptr) {
+bool startSession(const std::wstring& source, bool input, const wchar_t* ids, const wchar_t* delayList = nullptr, const wchar_t* matrixList = nullptr) {
     auto& session = sessions[source];
     if (!session.engine) session.engine = std::make_unique<mux::AudioEngine>();
     session.engine->stop();
@@ -135,6 +135,7 @@ bool startSession(const std::wstring& source, bool input, const wchar_t* ids, co
     std::wistringstream lines(ids ? ids : L"");
     std::wistringstream delayLines(delayList ? delayList : L"");
     config.normalize_output_delays = delayList == nullptr;
+    std::wistringstream matrixLines(matrixList ? matrixList : L"");
     std::wstring id;
     while (std::getline(lines, id)) if (!id.empty()) {
         if (std::any_of(config.outputs.begin(), config.outputs.end(), [&](const auto& output) { return output.endpoint_id == id; })) {
@@ -150,8 +151,28 @@ bool startSession(const std::wstring& source, bool input, const wchar_t* ids, co
             delay = std::stoll(line);
             if (delay > config.max_delay_ms) { error = "Delay exceeds 10000 ms"; return false; }
         }
-        config.outputs.push_back({id, delay});
+        mux::OutputRequest request;
+        request.endpoint_id = id; request.relative_delay_ms = delay;
+        if (matrixList) {
+            std::wstring row;
+            if (!std::getline(matrixLines, row)) { error = "One matrix row required per output"; return false; }
+            std::wistringstream entries(row);
+            size_t count = 0;
+            if (!(entries >> count) || count > 1024) { error = "Invalid matrix size"; return false; }
+            for (size_t i = 0; i < count; ++i) {
+                mux::ChannelConnection connection;
+                if (!(entries >> connection.source >> connection.destination >> connection.gain)) {
+                    error = "Invalid channel connection"; return false;
+                }
+                request.channel_map.push_back(connection);
+            }
+            std::wstring extra;
+            if (entries >> extra) { error = "Extra matrix values"; return false; }
+        }
+        config.outputs.push_back(std::move(request));
     }
+    std::wstring extraMatrix;
+    if (matrixList && std::getline(matrixLines, extraMatrix)) { error = "Extra matrix rows"; return false; }
     std::wstring extraDelay;
     if (delayList && std::getline(delayLines, extraDelay)) { error = "Extra output delay values"; return false; }
     if (config.outputs.empty()) { sessions.erase(source); error.clear(); return true; }
@@ -182,6 +203,7 @@ void writeStats(std::ostream& out, const std::wstring& source, const Session& se
         out << "{\"id\":" << quote(utf8(device.endpoint_id)) << ",\"faulted\":" << (device.faulted ? "true" : "false")
             << ",\"running\":" << (device.running ? "true" : "false") << ",\"fill_bytes\":" << device.fill_bytes
             << ",\"target_bytes\":" << device.target_bytes << ",\"sample_rate\":" << device.sample_rate_hz
+            << ",\"clipped_samples\":" << device.clipped_samples
             << ",\"overflows\":" << device.overflow_count << ",\"underflows\":" << device.partial_underflow_count + device.catastrophic_underflow_count
             << ",\"delay_ms\":" << device.configured_delay_ms
             << ",\"max_live_delay_ms\":" << device.max_delay_ms_for_device
@@ -285,4 +307,13 @@ API const char* ar_stats() {
 API void ar_close() {
     std::lock_guard<std::mutex> lock(apiMutex);
     sessions.clear();
+}
+
+API int ar_source_start_matrix(const wchar_t* source, int input, const wchar_t* ids,
+                               const wchar_t* delays, const wchar_t* matrices) {
+    std::lock_guard<std::mutex> lock(apiMutex);
+    try {
+        if (!source || !*source || !ids || !delays || !matrices) { error = "Missing matrix routing arguments"; return 0; }
+        return startSession(source, input != 0, ids, delays, matrices) ? 1 : 0;
+    } catch (const std::exception& e) { error = e.what(); return 0; }
 }

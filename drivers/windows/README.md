@@ -1,29 +1,16 @@
-# Windows virtual audio: VB-CABLE
+# VB-CABLE integration
 
-The former custom WDK/SimpleAudioSample driver, native root-device manager and unsigned-driver build have been removed. A2Router uses the supplied, original **VBCABLE_Driver_Pack45.zip** by VB-Audio Software.
+A2Router includes the unchanged VB-Audio base package `vendor/vbcable/VBCABLE_Driver_Pack45.zip`.
+SHA-256: `b950e39f01af1d04ea623c8f6d8eb9b6ea5c477c637295fabf20631c85116bfb`.
 
-## Package and attribution
+Build the portable app with `tools/windows/build-portable.ps1` or the manual GitHub workflow. `prepare_vbcable.py` verifies the hash and extracts all original vendor files. No WDK, custom driver or application setup EXE is used.
 
-- Archive: `vendor/vbcable/VBCABLE_Driver_Pack45.zip` (unchanged).
-- SHA-256: `b950e39f01af1d04ea623c8f6d8eb9b6ea5c477c637295fabf20631c85116bfb`.
-- Official origin: https://www.vb-cable.com/
-- Donationware: donations and license purchases are welcome at https://vb-audio.com/Services/licensing.htm.
-- Original end-user license is retained inside the ZIP as `readme.txt` and displayed by A2Router setup. See `vendor/vbcable/NOTICE.txt` for distribution conditions, including professional deployments. No A+B/C+D package is included.
+The GUI's **Virtual devices → Create output** requests UAC only when the cable is absent. `windows_vbcable.py` waits on an elevated `install-vbcable.ps1`, which validates the vendor signature and executes the original installer. PnP status is checked independently of its exit code. The GUI/backend then refresh active WASAPI endpoints. Immediately ready devices can be used; reported restart requirements remain visible. Installing on launch or profile restoration is prohibited by design.
 
-## Build and installation
+One shared cable is available; separate A/B/C/D drivers are not included. The A2Router name field saves a display alias. System name, supported speaker layout and format are configured through the Windows Sound panel. The native bridge identifies actual cable endpoints through the `VBAudioVACMME` PnP service and blocks cable feedback, including alternative playback pins.
 
-1. Build the normal native WASAPI bridge and portable Python/Qt app using `tools/windows/build-portable.ps1`. No WDK is needed.
-2. That script verifies the archive hash and extracts all vendor files without modifying them into `dist/windows-x64/vendor/vb-cable`.
-3. Run `tools/windows/build-setup.ps1` with Inno Setup 6.3+ installed. It checks the vendor installer signature and creates `dist/setup/A2Router-Setup-x64.exe`.
-4. Run setup on the target Windows x64 machine. Its checked-by-default VB-CABLE task runs the original installer if the base cable is absent, with administrator approval. Existing healthy installations are left untouched.
-5. New driver installation needs a restart. Problems are logged to `%TEMP%\A2Router-VBCABLE-install.log`; failed driver installation is reported as a failure, not assumed successful from a vendor exit code. Neither certificate stores nor boot/security policy are changed.
+**Remove driver…** requires explicit confirmation and removal of dependent routes. It affects all apps using the shared cable. Vendor uninstall is verified through PnP and may request a restart. Deleting A2Router's portable folder leaves the driver installed unless you remove it first. No certificate or security-policy changes are made; Windows may select different default sound devices during driver installation.
 
-The GitHub workflow remains manual-only. Its `build_setup` input now builds the complete installer instead of an unsigned custom driver. Application uninstallation offers shared-driver removal, with a default based on the recorded installation owner. Pre-existing drivers are never removed silently. Use `/REMOVEVBCABLE=1` to request driver removal during silent uninstall. Failure keeps A2Router/vendor files available for repair. Windows may automatically choose new defaults when installing a driver; review Sound settings afterward. A2Router itself does not select default speakers/microphones.
+VB-CABLE is donationware by [VB-Audio Software](https://www.vb-cable.com/). The original copyright, files and `readme.txt` license remain unchanged. [Donations, licensing and bundling terms](https://vb-audio.com/Services/licensing.htm); professional deployments may require separate licensing. See `vendor/vbcable/NOTICE.txt`.
 
-## Routing and limitations
-
-The base package provides one shared cable, with playback endpoints **CABLE Input** / **CABLE In 16 Ch** and recording endpoint **CABLE Output**. These playback alternatives are not independent named cables. Send source applications to CABLE Input, then select CABLE Output in A2Router as a route source. The native bridge identifies the vendor PnP service rather than inventing endpoints from display names. Reported current formats/layouts come from Windows. VB-CABLE's own control panel manages its internal format/latency options.
-
-The recording endpoint is captured directly with WASAPI; real output-monitor sources remain WASAPI loopbacks. Shared-cable feedback groups prevent routing a cable's recording/monitor stream back to either of its playback endpoints. Independent source sessions and physical-output fan-out still use the preserved MultiRoute engine.
-
-No driver installation is performed during builds/tests or on ordinary application launch. The setup and physical signal paths must be validated on a target machine; package signature/ZIP integrity checks are not audio playback verification.
+Driver operations and native audio transport require target-machine verification. ZIP integrity, signatures and simulated installer tests do not establish playback correctness.

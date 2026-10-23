@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 from uuid import UUID
 
+from a2router.channels import validate_channel_map
 from a2router.models import LAYOUTS, BackendError
 
 
@@ -18,10 +19,27 @@ def _uuid(value):
 
 def validate(data):
     try:
-        if not isinstance(data, dict) or set(data) != {"version", "virtual_devices", "routes"}:
+        if not isinstance(data, dict) or set(data) - {"endpoint_aliases"} != {
+            "version",
+            "virtual_devices",
+            "routes",
+        }:
             raise ValueError("Expected version, virtual_devices, and routes")
         if type(data["version"]) is not int or data["version"] != 1:
             raise ValueError("Unsupported configuration version")
+        aliases = data.get("endpoint_aliases", {})
+        if not isinstance(aliases, dict) or len(aliases) > 1000:
+            raise ValueError("Invalid endpoint aliases")
+        for ident, name in aliases.items():
+            if (
+                not isinstance(ident, str)
+                or not 0 < len(ident) <= 2048
+                or not isinstance(name, str)
+                or not name.strip()
+                or len(name) > 128
+                or any(ord(c) < 32 for c in name)
+            ):
+                raise ValueError("Invalid endpoint alias")
         ids, pairs = set(), set()
         for key in ("virtual_devices", "routes"):
             if not isinstance(data[key], list) or len(data[key]) > 1000:
@@ -64,8 +82,7 @@ def validate(data):
                     delay = item.get("delay_ms", 0)
                     if type(delay) is not int or not 0 <= delay <= 10000:
                         raise ValueError("Delay must be an integer between 0 and 10000 ms")
-                    if item["channel_map"] != []:
-                        raise ValueError("Channel-level routing is not implemented")
+                    validate_channel_map(item["channel_map"])
                     pair = (item["source_id"], item["destination_id"])
                     if pair in pairs:
                         raise ValueError("Duplicate route")

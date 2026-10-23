@@ -1,6 +1,9 @@
 #include "AudioRingBuffer.h"
 #include "ClockDriftController.h"
 #include "Logging.h"
+#include "ChannelMatrix.h"
+#include <limits>
+#include <cmath>
 #include <array>
 #include <iostream>
 #include <thread>
@@ -9,6 +12,51 @@
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 int main() {
     try {
+        const mux::PcmEncoding floats{2, 32, 32, true};
+        const std::array<float, 4> samples{0.25f, -0.5f, 0.75f, 0.5f};
+        std::array<float, 6> mapped{};
+        mux::ChannelMatrix swap(floats, 2, {{0, 1, 1}, {1, 0, 1}});
+        require(swap.process(reinterpret_cast<const uint8_t*>(samples.data()), mapped.data(), 2) == 0, "unexpected clipping");
+        require(mapped[0] == -0.5f && mapped[1] == 0.25f && mapped[2] == 0.5f && mapped[3] == 0.75f, "channel swap");
+        mux::ChannelMatrix duplicate(floats, 3, {{0, 0, 1}, {0, 1, 1}});
+        duplicate.process(reinterpret_cast<const uint8_t*>(samples.data()), mapped.data(), 2);
+        require(mapped[0] == 0.25f && mapped[1] == 0.25f && mapped[2] == 0 && mapped[5] == 0, "duplication/unmapped silence");
+        mux::ChannelMatrix sum(floats, 1, {{0, 0, 1}, {1, 0, 1}});
+        require(sum.process(reinterpret_cast<const uint8_t*>(samples.data()), mapped.data(), 2) == 1, "mix clipping count");
+        require(mapped[0] == -0.25f && mapped[1] == 1.0f, "summing/clipping");
+        mux::ChannelMatrix identity(floats, 2, {{0, 0, 1}, {1, 1, 1}});
+        identity.process(reinterpret_cast<const uint8_t*>(samples.data()), mapped.data(), 2);
+        require(std::equal(samples.begin(), samples.end(), mapped.begin()), "float identity integrity");
+        const float surround[] = {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f};
+        std::array<float, 8> multichannel{};
+        mux::ChannelMatrix surroundMap({6, 32, 32, true}, 8,
+            {{0, 0, 1}, {1, 1, 1}, {2, 2, 1}, {3, 3, 1}, {4, 4, 1}, {5, 5, 1}});
+        surroundMap.process(reinterpret_cast<const uint8_t*>(surround), multichannel.data(), 1);
+        require(std::equal(surround, surround + 6, multichannel.begin()) && multichannel[6] == 0 && multichannel[7] == 0,
+            "multichannel order/preservation");
+        mux::ChannelMatrix inverse(floats, 2, {{0, 0, -2}, {1, 1, -2}});
+        require(inverse.process(reinterpret_cast<const uint8_t*>(samples.data()), mapped.data(), 2) == 1,
+            "negative gain clipping count");
+        require(mapped[0] == -0.5f && mapped[1] == 1 && mapped[2] == -1 && mapped[3] == -1,
+            "gain/inversion/clipping");
+        const uint8_t pcm16[] = {0, 0x80, 0xff, 0x7f};
+        mux::ChannelMatrix decode16({2, 16, 16, false}, 2, {{0, 0, 1}, {1, 1, 1}});
+        decode16.process(pcm16, mapped.data(), 1);
+        require(mapped[0] == -1 && mapped[1] == 32767.0f / 32768.0f, "PCM16 decode");
+        const uint8_t pcm24[] = {0, 0, 0x80, 0, 0, 0x40};
+        mux::ChannelMatrix decode24({2, 24, 24, false}, 2, {{0, 0, 1}, {1, 1, 1}});
+        decode24.process(pcm24, mapped.data(), 1);
+        require(mapped[0] == -1 && mapped[1] == 0.5f, "PCM24 decode");
+        const uint8_t pcm32[] = {0, 0, 0, 0x80, 0, 0, 0, 0x40};
+        mux::ChannelMatrix decode32({2, 32, 24, false}, 2, {{0, 0, 1}, {1, 1, 1}});
+        decode32.process(pcm32, mapped.data(), 1);
+        require(mapped[0] == -1 && mapped[1] == 0.5f, "PCM32 valid-bit alignment");
+        const float nonfinite[] = {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()};
+        identity.process(reinterpret_cast<const uint8_t*>(nonfinite), mapped.data(), 1);
+        require(mapped[0] == 0 && mapped[1] == 0, "non-finite sample protection");
+        bool invalid = false;
+        try { mux::ChannelMatrix bad(floats, 2, {{2, 0, 1}}); } catch (const std::invalid_argument&) { invalid = true; }
+        require(invalid, "invalid channel accepted");
         mux::AudioRingBuffer ring(31);
         std::array<uint8_t, 24> original{}, output{};
         for (size_t i = 0; i < original.size(); ++i) original[i] = static_cast<uint8_t>(i * 7);

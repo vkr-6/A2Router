@@ -2,11 +2,6 @@ name: A2Router build
 
 on:
   workflow_dispatch:
-    inputs:
-      build_setup:
-        description: Build the Windows setup EXE with the original VB-CABLE package
-        type: boolean
-        default: true
 
 permissions:
   contents: read
@@ -29,27 +24,6 @@ jobs:
       - name: Build, check and package
         shell: pwsh
         run: ./tools/windows/build-portable.ps1 -Workspace "$env:RUNNER_TEMP/a2router-build" -Headless
-      - name: Ensure setup compiler
-        if: inputs.build_setup
-        shell: pwsh
-        run: |
-          $installed = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 7\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe") | Where-Object { Test-Path $_ }
-          if (!(Get-Command ISCC.exe -ErrorAction SilentlyContinue) -and !$installed) {
-            choco install innosetup --yes --no-progress --limit-output
-            if ($LASTEXITCODE) { throw 'Inno Setup installation failed' }
-          }
-      - name: Build Windows setup
-        if: inputs.build_setup
-        shell: pwsh
-        run: ./tools/windows/build-setup.ps1
-      - name: Upload Windows setup
-        if: inputs.build_setup
-        uses: actions/upload-artifact@v4
-        with:
-          name: A2Router-Setup-x64
-          path: dist/setup/
-          if-no-files-found: error
-          retention-days: 14
       - name: Upload portable application
         uses: actions/upload-artifact@v4
         with:

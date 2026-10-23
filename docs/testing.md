@@ -28,7 +28,7 @@ powershell -ExecutionPolicy Bypass -File tools/windows/build-portable.ps1
 
 Outputs are generated in `dist/windows-x64/` and `dist/a2router-windows-x64.zip`; intermediate Windows files default to `%LOCALAPPDATA%\a2router-build`. Use `-Workspace C:\your\build-folder` to choose their location. No compiler downloads or VM are needed when Visual Studio is installed.
 
-In the GUI inspect devices, then test an output loopback to another output using low-volume audio. Avoid routes that return audio to its source. Microphone monitoring needs explicit confirmation; use headphones to avoid feedback. Verify enable/disable, multiple destinations and configuration restoration on your hardware. Windows virtual audio uses the unchanged VB-CABLE package bundled by A2Router setup; see `drivers/windows/README.md`. Actual installation requires a separate target-machine check. The VM-only PCM test is opt-in and is not intended for ordinary desktops.
+In the GUI inspect devices, then test an output loopback to another output using low-volume audio. Avoid routes that return audio to its source. Microphone monitoring needs explicit confirmation; use headphones to avoid feedback. Verify enable/disable, multiple destinations and configuration restoration on your hardware. Windows virtual audio uses the unchanged VB-CABLE package bundled in the portable ZIP and installed only from Create output in Virtual devices; see `drivers/windows/README.md`. Actual installation requires a separate target-machine check. The VM-only PCM test is opt-in and is not intended for ordinary desktops.
 
 ## Native Linux / PipeWire
 
@@ -54,3 +54,7 @@ dbus-run-session -- python tests/run_private_pipewire.py
 ```
 
 That test creates private servers and temporary virtual endpoints; it does not validate physical speakers. See `docs/verification.md` for previous observed results and limitations. Standard tests use offscreen Qt and skip opt-in platform integration tests.
+
+## Optional channel routing
+
+Run `ctest` for float identity, swaps, duplication, unmapped silence, summing/clipping and PCM16/24/32 decoding tests. Python tests validate matrix shapes/gains, ABI serialization, disabled/reenabled routes, profile restoration and no-restart polling. These checks do not verify WASAPI output formats on a real Windows endpoint. On a suitable target, use a low-level stereo signal to check channel order, duplication, gain and clipping telemetry. No driver installation should be needed if VB-CABLE is already present.

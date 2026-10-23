@@ -21,6 +21,7 @@ class Controller:
         self.virtual_definitions.update(self.backend.virtual_devices)
         return {
             "version": 1,
+            "endpoint_aliases": dict(self.backend.endpoint_aliases),
             "virtual_devices": [asdict(v) for v in self.virtual_definitions.values()],
             "routes": [
                 {k: v for k, v in asdict(r).items() if k not in ("status", "error", "resource_ids")}
@@ -63,6 +64,7 @@ class Controller:
             pair = (item["source_id"], item["destination_id"])
             if pair in existing_pairs and existing_pairs[pair] != item["id"]:
                 raise BackendError("Profile duplicates an existing route under a different ID")
+        self.backend.endpoint_aliases.update(data.get("endpoint_aliases", {}))
         if not activate:
             for item in data["virtual_devices"]:
                 config = VirtualDevice(**item)
@@ -91,8 +93,10 @@ class Controller:
                     monitoring_confirmed=item["monitoring_confirmed"],
                     allow_missing=True,
                     delay_ms=item.get("delay_ms", 0),
+                    channel_map=item.get("channel_map", []),
                 )
                 route.delay_ms = item.get("delay_ms", 0)
+                route.channel_map = [dict(connection) for connection in item.get("channel_map", [])]
                 route.monitoring_confirmed = item["monitoring_confirmed"]
                 if item["enabled"]:
                     self.backend.enable_route(route.id)

@@ -19,6 +19,8 @@ def main():
         raise SystemExit("Native bridge is missing the synchronization export")
     if not hasattr(bridge, "ar_source_set_delay"):
         raise SystemExit("Native bridge is missing live delay control")
+    if not hasattr(bridge, "ar_source_start_matrix"):
+        raise SystemExit("Native bridge is missing channel matrix routing")
     print(json.dumps({"native_bridge_api": 2, "vbcable_discovery_api": 1, "delay_export": True}))
 
 

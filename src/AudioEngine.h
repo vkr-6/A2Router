@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "ClockDriftController.h"
+#include "ChannelMatrix.h"
 #include "Logging.h"
 
 namespace mux {
@@ -52,6 +53,7 @@ struct OutputRequest {
     // startup; adjustable afterward without a restart via
     // AudioEngine::setDeviceVolume() — see that method's comment for why.
     float initial_volume = 1.0f;
+    std::vector<ChannelConnection> channel_map; // Empty preserves existing WASAPI conversion.
 };
 
 struct EngineConfig {
@@ -111,6 +113,7 @@ struct DeviceStats {
     bool     prebuffering = true;
     bool     running = false;
     bool     faulted = false;
+    uint64_t clipped_samples = 0;
     uint64_t overflow_count = 0;
     uint64_t partial_underflow_count = 0;
     uint64_t catastrophic_underflow_count = 0;

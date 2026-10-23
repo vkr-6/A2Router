@@ -197,11 +197,11 @@ def test_session_lock(tmp_path):
         pass
 
 
-def test_unsupported_channel_map(backend):
+def test_malformed_channel_map(backend):
     from a2router.models import Route
 
     route = Route("mic", "speakers", channel_map=[[0, 0]])
-    with pytest.raises(BackendError, match="Individual-channel"):
+    with pytest.raises(BackendError, match="Each channel connection"):
         backend._validate_route(route)
 
 

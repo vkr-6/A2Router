@@ -22,7 +22,7 @@ try {
     }
     if (!$Uninstall -and $existing.Count -gt 0) {
         if (@($existing | Where-Object { $_.ConfigManagerErrorCode -notin @(0, 14) }).Count) {
-            throw 'Existing VB-CABLE reports a device problem. Repair it with the vendor installer; setup will not overwrite it.'
+            throw 'Existing VB-CABLE reports a device problem. Repair it with the vendor installer; A2Router will not overwrite it.'
         }
         Write-InstallLog 'VB-CABLE already installed; left unchanged.'
         if (@($existing | Where-Object { $_.ConfigManagerErrorCode -eq 14 }).Count) { exit 3010 }
@@ -53,14 +53,18 @@ try {
     }
     if (!$cable.Count) { throw 'VB-CABLE was not detected after setup. Review the vendor installer and restart requirements.' }
     if ($StateFile) {
-        # Only mark installations created by this setup, never pre-existing ones.
-        [IO.File]::WriteAllText($StateFile, 'Installed by A2Router setup; shared VB-CABLE driver.')
+        # Only mark installations created by this operation, never pre-existing ones.
+        [IO.File]::WriteAllText($StateFile, 'Installed by A2Router; shared VB-CABLE driver.')
     }
     if (@($cable | Where-Object { $_.ConfigManagerErrorCode -notin @(0, 14) }).Count) {
         throw 'Windows reports a problem with the newly installed VB-CABLE device.'
     }
-    Write-InstallLog 'VB-CABLE PnP device found. Windows restart required; audio playback has not been verified.'
-    exit 3010
+    if (@($cable | Where-Object { $_.ConfigManagerErrorCode -eq 14 }).Count) {
+        Write-InstallLog 'Windows reports a restart pending.'
+        exit 3010
+    }
+    Write-InstallLog 'VB-CABLE PnP device ready. The application will verify active audio endpoints.'
+    exit 0
 } catch {
     Write-InstallLog $_.Exception.Message
     Write-Error $_

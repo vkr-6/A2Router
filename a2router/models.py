@@ -57,7 +57,7 @@ class Route:
     id: str = field(default_factory=lambda: str(uuid4()))
     enabled: bool = True
     monitoring_confirmed: bool = False
-    channel_map: list = field(default_factory=list)  # reserved; rejected until implemented
+    channel_map: list = field(default_factory=list)  # {source, destination, gain}; zero-based channels
     status: str = "pending"
     error: str = ""
     resource_ids: list[str] = field(default_factory=list)
