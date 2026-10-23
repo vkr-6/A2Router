@@ -68,20 +68,28 @@ class AudioBackend:
             raise BackendError("Source or destination is unavailable")
         if source.kind != "input" or dest.kind != "output":
             raise BackendError("Select an input or output monitor as source and an output as destination")
-        if source.monitor_of == dest.id:
+        if source.monitor_of == dest.id or (
+            source.properties.get("feedback_group")
+            and source.properties["feedback_group"] == dest.properties.get("feedback_group")
+        ):
             raise BackendError("Feedback: a sink monitor cannot feed its own sink")
         if not source.monitor_of and dest.virtual is not True and not route.monitoring_confirmed:
             raise BackendError("Microphone/input monitoring requires explicit feedback-risk confirmation")
         self._validate_layout(source, dest)
+
         # Collapse monitor sources onto their parent sinks and reject cycles,
         # including disabled desired routes which could be enabled later.
+        def node(ident):
+            device = self.devices.get(ident)
+            return device.properties.get("feedback_group", ident) if device else ident
+
         graph = {}
         for r in [*self.routes.values(), route]:
             s = self.devices.get(r.source_id)
             if s and s.monitor_of:
-                graph.setdefault(s.monitor_of, set()).add(r.destination_id)
-        start = source.monitor_of
-        stack, seen = [dest.id], set()
+                graph.setdefault(node(s.monitor_of), set()).add(node(r.destination_id))
+        start = node(source.monitor_of)
+        stack, seen = [node(dest.id)], set()
         while stack:
             node = stack.pop()
             if node == start:

@@ -6,8 +6,8 @@ import os
 import sys
 from pathlib import Path
 
+from a2router.backends import windows_vbcable
 from a2router.backends.base import AudioBackend
-from a2router.backends.windows_virtual import WindowsVirtualDevices
 from a2router.models import BackendError, Device
 
 
@@ -29,9 +29,8 @@ class WindowsBackend(AudioBackend):
         self.source_endpoints = {}
         self.telemetry = {}
         self.active_delays = {}
-        self.virtual_manager = WindowsVirtualDevices()
+        self.has_live_delay_api = bridge is not None and hasattr(bridge, "ar_source_set_delay")
         self.has_delay_api = bridge is not None and hasattr(bridge, "ar_source_start_delays")
-        self.has_virtual_api = bridge is not None and hasattr(bridge, "ar_virtual_discovery_version")
         if bridge is None:
             path = library_path()
             try:
@@ -45,11 +44,6 @@ class WindowsBackend(AudioBackend):
                     raise BackendError("WASAPI bridge API mismatch; rebuild the native DLL")
                 self.bridge.ar_source_start.argtypes = [ctypes.c_wchar_p, ctypes.c_int, ctypes.c_wchar_p]
                 self.bridge.ar_source_start.restype = ctypes.c_int
-                self.has_virtual_api = hasattr(self.bridge, "ar_virtual_discovery_version")
-                if self.has_virtual_api:
-                    self.bridge.ar_virtual_discovery_version.argtypes = []
-                    self.bridge.ar_virtual_discovery_version.restype = ctypes.c_int
-                    self.has_virtual_api = self.bridge.ar_virtual_discovery_version() == 1
                 self.has_delay_api = hasattr(self.bridge, "ar_source_start_delays")
                 if self.has_delay_api:
                     self.bridge.ar_source_start_delays.argtypes = [
@@ -59,6 +53,15 @@ class WindowsBackend(AudioBackend):
                         ctypes.c_wchar_p,
                     ]
                     self.bridge.ar_source_start_delays.restype = ctypes.c_int
+                self.has_live_delay_api = hasattr(self.bridge, "ar_source_set_delay")
+                if self.has_live_delay_api:
+                    self.bridge.ar_source_set_delay.argtypes = [
+                        ctypes.c_wchar_p,
+                        ctypes.c_int,
+                        ctypes.c_wchar_p,
+                        ctypes.c_int64,
+                    ]
+                    self.bridge.ar_source_set_delay.restype = ctypes.c_int
                 self.bridge.ar_close.argtypes = []
                 self.bridge.ar_close.restype = None
             except (OSError, AttributeError, BackendError) as exc:
@@ -68,12 +71,12 @@ class WindowsBackend(AudioBackend):
     def capabilities(self):
         return {
             "routing": self.bridge is not None,
-            "virtual_devices": self.bridge is not None
-            and self.has_virtual_api
-            and self.virtual_manager.available(),
-            "layouts": ["stereo"]
-            if self.bridge is not None and self.has_virtual_api and self.virtual_manager.available()
-            else [],
+            "virtual_devices": False,
+            "layouts": [],
+            "virtual_device_provider": "VB-CABLE",
+            "install_virtual_driver": os.name == "nt"
+            and (windows_vbcable.payload_directory() / "VBCABLE_Setup_x64.exe").is_file(),
+            "live_route_delay": self.bridge is not None and self.has_live_delay_api,
             "route_delay": self.bridge is not None and self.has_delay_api,
             "channel_routing": False,
             "adjustable_latency": False,
@@ -81,7 +84,7 @@ class WindowsBackend(AudioBackend):
             "sources": "Active microphone/input endpoints and loopbacks of every active output",
             "mixing": "Independent shared-mode source sessions mixed by Windows; PCM conversion may occur",
             "route_changes": "Changing destinations restarts only the affected source's outputs",
-            "virtual_driver": "Render-only WDK driver; signed package/UAC required, implementation UNTESTED",
+            "virtual_driver": "VB-CABLE by VB-Audio; shared cable installed by A2Router setup",
         }
 
     def _error(self):
@@ -106,6 +109,8 @@ class WindowsBackend(AudioBackend):
     def _native_source(self, source_id):
         source = self.devices.get(source_id)
         if source:
+            if source.properties.get("capture_endpoint_id"):
+                return source.properties["capture_endpoint_id"], True
             endpoint = self.devices.get(source.monitor_of) if source.monitor_of else source
             if endpoint is None:
                 raise BackendError("The monitor's render endpoint is unavailable")
@@ -138,22 +143,11 @@ class WindowsBackend(AudioBackend):
             devices = {}
             for row in json.loads(data):
                 ident, name = row.pop("id"), row.pop("name")
-                json_id = ident
                 kind = row.pop("kind")
                 positions = tuple(row.pop("positions", ()))
-                properties = row.get("properties", {})
-                owned = properties.get("a2router_instance", "").lower()
-                if owned and kind == "output" and len(owned) == 32:
-                    ident = "sink:a2router_v_" + owned
-                    properties["native_endpoint_id"] = json_id
-                    row["properties"] = properties
                 devices[ident] = Device(ident, name, kind, positions=positions, state="ACTIVE", **row)
                 if kind == "output":
-                    monitor_id = (
-                        "source:" + ident.removeprefix("sink:") + ".monitor"
-                        if ident.startswith("sink:a2router_v_")
-                        else "wasapi-loopback:" + ident
-                    )
+                    monitor_id = "wasapi-loopback:" + ident
                     devices[monitor_id] = Device(
                         monitor_id,
                         name + " (WASAPI loopback)",
@@ -165,7 +159,17 @@ class WindowsBackend(AudioBackend):
                         sample_format=devices[ident].sample_format,
                         state="ACTIVE",
                         monitor_of=ident,
+                        properties=dict(devices[ident].properties),
                     )
+            cable_outputs = {}
+            for device in devices.values():
+                if device.kind == "output" and device.properties.get("virtual_driver") == "VB-CABLE":
+                    cable_outputs.setdefault(device.properties["feedback_group"], []).append(device.id)
+            for device in devices.values():
+                group = device.properties.get("feedback_group")
+                if device.kind == "input" and not device.monitor_of and group in cable_outputs:
+                    device.monitor_of = cable_outputs[group][0]
+                    device.properties["capture_endpoint_id"] = device.id
             self.devices, self.last_error = devices, ""
             self._read_stats()
             if reconcile:
@@ -288,37 +292,45 @@ class WindowsBackend(AudioBackend):
         finally:
             route.enabled = old
 
-    def _create_virtual(self, config):
-        if config.device_id in self.devices:
-            return  # Existing root instance was verified by native ancestry discovery.
-        self.virtual_manager.create(config)
-        self.refresh(reconcile=False)
-        if config.device_id not in self.devices and not self.virtual_manager.reboot_required:
-            raise BackendError(
-                "Driver installed but its audio endpoint is not active; inspect Device Manager"
-            )
-
-    def _remove_virtual(self, config):
-        self.virtual_manager.remove(config)
-        self.refresh(reconcile=False)
-
     def remove_virtual_device(self, device_id):
-        config = next((v for v in self.virtual_devices.values() if device_id in (v.id, v.device_id)), None)
-        if config and any(
-            r.source_id == "source:" + config.device_id.removeprefix("sink:") + ".monitor"
-            or r.destination_id == config.device_id
-            for r in self.routes.values()
-        ):
-            raise BackendError("Remove routes using this virtual device first")
-        super().remove_virtual_device(device_id)
+        raise BackendError(
+            "VB-CABLE is a shared driver. Use its vendor installer to uninstall it explicitly."
+        )
 
-    def set_route_delay(self, route_id, delay_ms):
+    def install_virtual_driver(self):
+        if any(d.properties.get("virtual_driver") == "VB-CABLE" for d in self.devices.values()):
+            return "VB-CABLE is already present; use its existing endpoints."
+        return windows_vbcable.install()
+
+    def set_route_delay(self, route_id, delay_ms, *, allow_restart=True):
         if not self.capabilities().get("route_delay"):
             raise BackendError("Rebuild the WASAPI DLL to enable synchronization delay controls")
         if type(delay_ms) is not int or not 0 <= delay_ms <= 10000:
             raise BackendError("Additional delay must be between 0 and 10000 ms")
         route = self.get_route_status(route_id)
         old_delay = route.delay_ms
+        if route.enabled:
+            self._validate_route(route)
+        if route.enabled and self.has_live_delay_api and route.status == "connected":
+            native_id, capture_input = self._native_source(route.source_id)
+            destination = self.devices[route.destination_id].properties.get(
+                "native_endpoint_id", route.destination_id
+            )
+            if self.bridge.ar_source_set_delay(native_id, int(capture_input), destination, delay_ms):
+                route.delay_ms = delay_ms
+                target = self.active_sessions.get(route.source_id, ())
+                values = list(self.active_delays.get(route.source_id, (0,) * len(target)))
+                if destination in target:
+                    values[target.index(destination)] = delay_ms
+                    self.active_delays[route.source_id] = tuple(values)
+                self._read_stats()
+                return
+            if not allow_restart:
+                raise BackendError(self._error())
+        elif route.enabled and not allow_restart:
+            raise BackendError(
+                "This route needs a source restart; enable the restart option to apply the delay"
+            )
         route.delay_ms = delay_ms
         if not route.enabled:
             return
@@ -336,7 +348,15 @@ class WindowsBackend(AudioBackend):
             "telemetry": self.telemetry,
             "native_library": str(library_path()),
             "processing": "Uncompressed shared-mode PCM; Windows mixing, rate conversion, and mono-to-stereo duplication may occur. Bit-perfect transport unverified.",
-            "virtual_driver": self.virtual_manager.diagnostics(),
+            "virtual_driver": {
+                "provider": "VB-CABLE",
+                "origin": "https://www.vb-cable.com/",
+                "donationware": "Donations are welcome: https://vb-audio.com/Services/licensing.htm",
+                "present": any(
+                    d.properties.get("virtual_driver") == "VB-CABLE" for d in self.devices.values()
+                ),
+                "arbitrary_device_creation": False,
+            },
         }
 
     def close(self):

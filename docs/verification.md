@@ -1,3 +1,17 @@
+# Verified checks for the VB-CABLE/UI revision
+
+- Actual Windows Qt offscreen regression suite: **60 passed, 6 skipped**; tests include stable item identity/selection, retained draft edits, queued actions, native telemetry formatting, live-delay/no-restart behavior and shared-cable feedback prevention.
+- Original vendor archive SHA-256 and per-file extraction integrity verified. The supplied vendor installer Authenticode status was Valid on Windows.
+- Setup and uninstall source compiled successfully with Inno Setup 6.3.3 using a temporary fixture application payload. The fixture setup was never executed and is not a deliverable app build.
+- Install/uninstall decisions exercised in Windows PowerShell with mocked PnP, signatures and process execution: no actual driver was installed or removed. Ownership/idempotency/removal-failure cases passed.
+- Actual VB-CABLE installation/uninstallation, new native DLL compilation and physical audio playback remain UNTESTED locally; the manual workflow builds the real binaries. Temporary test dependencies/compiler are removed after verification.
+
+Earlier records below are historical.
+
+# Current revision: VB-CABLE and UI fixes (2026-10-23)
+
+The custom WDK driver has been removed. A2Router now bundles the supplied VB-CABLE base package unchanged and prepares a Windows setup EXE. The package SHA-256 and its original installer Authenticode signature were checked; these are not installation or audio-transport verification. Synchronization and refresh behavior have new regression tests. Earlier results below are historical and do not establish this revision's hardware correctness.
+
 # A2Router verification status update — 2026-10-21
 
 New Windows virtual-driver source, root-device manager, persisted synchronization-delay controls and title/directory changes are **UNTESTED**, as requested. Only source syntax/XML parsing and diff review were performed for this revision. No driver/VM/toolchain was installed, no audio was emitted, and no automated tests or native builds were run. Historical results below do not verify these additions. Virtual-device implementation status is now UNTESTED rather than absent; only stereo 48 kHz/16-bit is exposed by the new driver.

@@ -2,10 +2,11 @@
 
 import json
 import sys
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 
-from PySide6.QtCore import QObject, QProcess, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QProcess, QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QApplication,
@@ -50,6 +51,11 @@ class MainWindow(QMainWindow):
         self.exit_ready = False
         self.busy, self.exiting = False, False
         self.view_devices, self.view_routes = {}, {}
+        self._pending_actions = deque()
+        self._sync_edits = {}
+        self._background = False
+        self._poll_error = ""
+        self._vbcable_page = self.backend.capabilities().get("virtual_device_provider") == "VB-CABLE"
         self.setWindowTitle("A2Router — Advanced Audio Router")
         self.resize(940, 620)
         self.tabs = QTabWidget()
@@ -136,13 +142,13 @@ class MainWindow(QMainWindow):
         self.device_details.setMaximumHeight(190)
         layout.addWidget(self.device_details)
         self.device_tree.itemSelectionChanged.connect(self.inspect_device)
-        self.button(layout, "Refresh devices", self.refresh)
+        self.button(layout, "Refresh devices", lambda: self.refresh(manual=True))
 
     def inspect_device(self):
         selected = self.device_tree.selectedItems()
         if selected:
-            self.device_details.setPlainText(
-                json.dumps(self.view_devices[selected[0].data(0, Qt.UserRole)], indent=2)
+            self._update_text(
+                self.device_details, json.dumps(self.view_devices[selected[0].data(0, Qt.UserRole)], indent=2)
             )
 
     def _routing_page(self):
@@ -185,6 +191,33 @@ class MainWindow(QMainWindow):
 
     def _virtual_page(self):
         layout = self.page("Virtual devices")
+        if self._vbcable_page:
+            label = QLabel(
+                'VB-CABLE is donationware by <a href="https://www.vb-cable.com/">VB-Audio Software</a>. '
+                '<a href="https://vb-audio.com/Services/licensing.htm">Donations and licenses are welcome.</a>'
+            )
+            label.setOpenExternalLinks(True)
+            label.setWordWrap(True)
+            layout.addWidget(label)
+            explanation = QLabel(
+                "A2Router setup installs the base VB-CABLE when absent. It provides one shared cable: "
+                "send applications to CABLE Input, then route CABLE Output to your destinations. "
+                "Additional named cables cannot be created from this package. Windows restart is required after installation."
+            )
+            explanation.setWordWrap(True)
+            layout.addWidget(explanation)
+            self.vbcable_status = QLabel("Checking installed endpoints…")
+            layout.addWidget(self.vbcable_status)
+            self.install_cable_button = self.button(
+                layout,
+                "Install VB-CABLE…",
+                lambda: self.submit(self.backend.install_virtual_driver),
+                self.backend.capabilities().get("install_virtual_driver", False),
+            )
+            self.virtual_tree = self.tree(
+                layout, ["VB-CABLE endpoint", "Type / layout", "Status", "Stable ID"]
+            )
+            return
         row = QHBoxLayout()
         self.virtual_name = QLineEdit()
         self.virtual_name.setPlaceholderText("Virtual device name")
@@ -230,48 +263,107 @@ class MainWindow(QMainWindow):
 
     def _status_page(self):
         layout = self.page("Synchronization")
-        capable = self.backend.capabilities().get("route_delay", False)
         self.sync_route = QComboBox()
+        self.sync_route.setMinimumContentsLength(28)
         self.sync_delay = QSpinBox()
         self.sync_delay.setRange(0, 10000)
         self.sync_delay.setSuffix(" ms")
         self.sync_route.currentIndexChanged.connect(self._sync_selection_changed)
-        self.sync_delay.setEnabled(capable)
-        self.sync_route.setEnabled(capable)
-        if capable:
-            row = QHBoxLayout()
-            row.addWidget(QLabel("Route"))
-            row.addWidget(self.sync_route, 1)
-            row.addWidget(QLabel("Additional delay"))
-            row.addWidget(self.sync_delay)
-            layout.addLayout(row)
-            self.button(layout, "Apply delay (restarts this source)", self.apply_sync_delay)
-            label = (
-                "WASAPI drift compensation runs automatically for each output. Additional delay is "
-                "software buffering, not measured speaker latency. Applying it briefly restarts all "
-                "destinations of this source. Physical/acoustic alignment requires measurement."
-            )
-        else:
-            label = (
-                "The backend manages clock adaptation. Adjustable delay is unavailable here. "
-                "On Windows, rebuild the WASAPI DLL to enable native delay controls. "
-                "Equal sample rates alone do not guarantee synchronized speakers."
-            )
-        message = QLabel(label)
-        message.setWordWrap(True)
-        layout.addWidget(message)
-        self.sync = QPlainTextEdit()
-        self.sync.setReadOnly(True)
-        layout.addWidget(self.sync)
+        self.sync_delay.valueChanged.connect(self._sync_edited)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Route"))
+        row.addWidget(self.sync_route, 1)
+        row.addWidget(QLabel("Additional delay"))
+        row.addWidget(self.sync_delay)
+        layout.addLayout(row)
+        self.sync_restart = QCheckBox("Allow a source restart if the current buffer cannot hold this delay")
+        self.sync_restart.setChecked(not self.backend.capabilities().get("live_route_delay", False))
+        layout.addWidget(self.sync_restart)
+        self.sync_edit_status = QLabel()
+        layout.addWidget(self.sync_edit_status)
+        self.sync_apply = self.button(layout, "Apply delay", self.apply_sync_delay)
+        self.sync_reset = self.button(layout, "Discard unapplied edit", self.reset_sync_edit)
+        note = QLabel(
+            "Native drift compensation adjusts output clocks automatically. Delay adds software buffering; "
+            "it does not measure speaker distance or remove clock drift. Within the available buffer, Windows "
+            "can apply it live. Large changes may briefly mute that output; an allowed restart affects all "
+            "destinations of this source. Linux delay adjustment is not exposed."
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        self.sync = self.tree(
+            layout,
+            [
+                "Source → output",
+                "Route",
+                "Requested delay",
+                "Buffer / target",
+                "Rate correction",
+                "Underruns",
+            ],
+        )
+        for column, width in enumerate((220, 140, 110, 140, 120, 80)):
+            self.sync.setColumnWidth(column, width)
+        self.sync_summary = QLabel("No routes configured.")
+        self.sync_summary.setWordWrap(True)
+        layout.addWidget(self.sync_summary)
+        self._update_sync_controls()
 
     def _sync_selection_changed(self):
-        route = self.view_routes.get(self.sync_route.currentData(), {})
-        self.sync_delay.setValue(route.get("delay_ms", 0))
+        ident = self.sync_route.currentData()
+        route = self.view_routes.get(ident, {})
+        value = self._sync_edits.get(ident, route.get("delay_ms", 0))
+        if self.sync_delay.value() != value:
+            with QSignalBlocker(self.sync_delay):
+                self.sync_delay.setValue(value)
+        self._update_sync_controls()
+
+    def _sync_edited(self, value):
+        ident = self.sync_route.currentData()
+        if ident in self.view_routes:
+            if value == self.view_routes[ident].get("delay_ms", 0):
+                self._sync_edits.pop(ident, None)
+            else:
+                self._sync_edits[ident] = value
+        self._update_sync_controls()
+
+    def _update_sync_controls(self):
+        ident = self.sync_route.currentData()
+        route = self.view_routes.get(ident)
+        capable = self.backend.capabilities().get("route_delay", False)
+        mutating = self.busy and not self._background
+        editable = capable and route is not None and not mutating
+        dirty = route is not None and ident in self._sync_edits
+        self.sync_route.setEnabled(capable and not mutating)
+        self.sync_delay.setEnabled(editable)
+        self.sync_restart.setEnabled(editable)
+        self.sync_apply.setEnabled(editable and dirty)
+        self.sync_reset.setEnabled(editable and dirty)
+        if not capable:
+            text = "Additional delay is unsupported by this backend; on Windows rebuild the native bridge."
+        elif route is None:
+            text = "Add a route, then select it here."
+        else:
+            text = f"Saved request: {route.get('delay_ms', 0)} ms" + (" — unapplied edit" if dirty else "")
+        self.sync_edit_status.setText(text)
+
+    def reset_sync_edit(self):
+        self._sync_edits.pop(self.sync_route.currentData(), None)
+        self._sync_selection_changed()
 
     def apply_sync_delay(self):
-        ident, delay = self.sync_route.currentData(), self.sync_delay.value()
+        ident, delay, restart = (
+            self.sync_route.currentData(),
+            self.sync_delay.value(),
+            self.sync_restart.isChecked(),
+        )
         if ident:
-            self.submit(lambda: self.backend.set_route_delay(ident, delay))
+
+            def apply():
+                self.backend.set_route_delay(ident, delay, allow_restart=restart)
+                return f"Requested {delay} ms additional delay; see route status and buffering below."
+
+            self.submit(apply)
 
     def _settings_page(self):
         layout = self.page("Settings / profiles")
@@ -313,17 +405,24 @@ class MainWindow(QMainWindow):
         if path:
             self.submit(lambda: self.controller.load(path))
 
-    def refresh(self):
-        if not self.busy:
-            self.submit(lambda: None, persist=False)
+    def refresh(self, manual=False):
+        self.submit(lambda: None, persist=False, background=not manual)
 
-    def submit(self, operation, persist=True):
-        if self.busy or self.exiting:
+    def submit(self, operation, persist=True, background=False):
+        if self.exiting:
             return
-        self.busy = True
-        for button in self.buttons:
-            button.setEnabled(False)
-        self.error.setText("Updating…")
+        if self.busy:
+            if not background:
+                self._pending_actions.append((operation, persist))
+                for button in self.buttons:
+                    button.setEnabled(False)
+            return
+        self.busy, self._background = True, background
+        if not background:
+            for button in self.buttons:
+                button.setEnabled(False)
+            self.error.setText("Updating…")
+        self._update_sync_controls()
 
         def work():
             message = ""
@@ -331,12 +430,13 @@ class MainWindow(QMainWindow):
                 result = operation()
                 if isinstance(result, list) and result:
                     message = "; ".join(map(str, result))
+                elif isinstance(result, str):
+                    message = result
                 self.controller.refresh()
                 if persist and self.state_path:
                     self.controller.save(self.state_path)
             except Exception as exc:  # noqa: BLE001 — display worker failures and keep Qt alive
                 message = str(exc)
-                # Never overwrite session state on failed profile parsing.
             snapshot = {
                 "devices": [asdict(d) for d in self.backend.list_devices()],
                 "routes": [asdict(r) for r in self.backend.list_routes()],
@@ -350,100 +450,220 @@ class MainWindow(QMainWindow):
         def done(task):
             try:
                 snapshot, message = task.result()
-                self.results.ready.emit(snapshot, None, message)
+                self.results.ready.emit(snapshot, background, message)
             except Exception as exc:  # noqa: BLE001 — display worker failures and keep Qt alive
-                self.results.ready.emit(None, None, str(exc))
+                self.results.ready.emit(None, background, str(exc))
 
         future.add_done_callback(done)
 
-    def _finished(self, snapshot, _, message):
+    def _finished(self, snapshot, background, message):
         self.busy = False
         for button in self.buttons:
             button.setEnabled(bool(button.property("capable")))
         if snapshot:
             self.populate(snapshot)
-        self.error.setText(
-            message or (snapshot or {}).get("diagnostics", {}).get("error") or self.backend.name
-        )
+        backend_error = (snapshot or {}).get("diagnostics", {}).get("error")
+        if not background:
+            self.error.setText(message or backend_error or self.backend.name)
+            self._poll_error = ""
+        elif message or backend_error:
+            self._poll_error = message or backend_error
+            self.error.setText(self._poll_error)
+        elif self._poll_error:
+            if self.error.text() == self._poll_error:
+                self.error.setText(self.backend.name)
+            self._poll_error = ""
+        elif not self.error.text():
+            self.error.setText(self.backend.name)
+        self._update_sync_controls()
         if self.exiting:
+            self._pending_actions.clear()
             self._finish_exit()
+        elif self._pending_actions:
+            operation, persist = self._pending_actions.popleft()
+            self.submit(operation, persist=persist)
+
+    @staticmethod
+    def _update_tree(tree, rows):
+        """Update cells in place so selection, scroll and item identity survive polls."""
+        wanted = {ident for ident, _ in rows}
+        existing = {
+            tree.topLevelItem(i).data(0, Qt.UserRole): tree.topLevelItem(i)
+            for i in range(tree.topLevelItemCount())
+        }
+        if len(existing) == len(rows) and all(
+            ident in existing and all(existing[ident].text(i) == value for i, value in enumerate(texts))
+            for ident, texts in rows
+        ):
+            return
+        with QSignalBlocker(tree):
+            tree.setUpdatesEnabled(False)
+            try:
+                for ident, texts in rows:
+                    item = existing.get(ident)
+                    if item is None:
+                        item = QTreeWidgetItem(texts)
+                        item.setData(0, Qt.UserRole, ident)
+                        tree.addTopLevelItem(item)
+                    else:
+                        for column, text in enumerate(texts):
+                            if item.text(column) != text:
+                                item.setText(column, text)
+                for index in range(tree.topLevelItemCount() - 1, -1, -1):
+                    if tree.topLevelItem(index).data(0, Qt.UserRole) not in wanted:
+                        tree.takeTopLevelItem(index)
+            finally:
+                tree.setUpdatesEnabled(True)
+
+    @staticmethod
+    def _update_combo(combo, rows):
+        current = combo.currentData()
+        old = [(combo.itemData(i), combo.itemText(i)) for i in range(combo.count())]
+        if dict(old) == dict(rows):
+            return
+        was_empty = combo.count() == 0
+        with QSignalBlocker(combo):
+            wanted = {ident for ident, _ in rows}
+            for index in range(combo.count() - 1, -1, -1):
+                if combo.itemData(index) not in wanted:
+                    combo.removeItem(index)
+            for ident, label in rows:
+                index = combo.findData(ident)
+                if index < 0:
+                    combo.addItem(label, ident)
+                elif combo.itemText(index) != label:
+                    combo.setItemText(index, label)
+            index = combo.findData(current)
+            combo.setCurrentIndex(index if index >= 0 else (0 if was_empty and combo.count() else -1))
+
+    @staticmethod
+    def _update_text(widget, text):
+        if widget.toPlainText() == text:
+            return
+        scroll = widget.verticalScrollBar().value()
+        cursor = widget.textCursor()
+        widget.setPlainText(text)
+        cursor.setPosition(min(cursor.position(), len(text)))
+        widget.setTextCursor(cursor)
+        widget.verticalScrollBar().setValue(scroll)
 
     def populate(self, snapshot):
-        source_id, dest_id = self.source.currentData(), self.destination.currentData()
-        sync_id = self.sync_route.currentData()
-        selected_route = self.route_tree.selectedItems()
-        route_id = selected_route[0].data(0, Qt.UserRole) if selected_route else None
-        selected_virtual = self.virtual_tree.selectedItems()
-        virtual_id = selected_virtual[0].data(0, Qt.UserRole) if selected_virtual else None
         self.view_devices = {d["id"]: d for d in snapshot["devices"]}
         self.view_routes = {r["id"]: r for r in snapshot["routes"]}
-        self.device_tree.clear()
-        self.source.clear()
-        self.destination.clear()
-        for d in snapshot["devices"]:
-            label = d["name"] + (" (default)" if d["default"] else "")
+        device_rows, source_rows, destination_rows = [], [], []
+        for device in snapshot["devices"]:
+            label = device["name"] + (" (default)" if device["default"] else "")
             classification = (
-                "unknown" if d["virtual"] is None else ("virtual" if d["virtual"] else "physical")
+                "unknown" if device["virtual"] is None else ("virtual" if device["virtual"] else "physical")
             )
-            format_text = (
-                f"{d['sample_format'] or '?'} / {d['sample_rate'] or '?'} Hz / {d['channels'] or '?'} ch"
+            format_text = f"{device['sample_format'] or '?'} / {device['sample_rate'] or '?'} Hz / {device['channels'] or '?'} ch"
+            device_rows.append(
+                (device["id"], [label, device["kind"], classification, device["state"], format_text])
             )
-            item = QTreeWidgetItem([label, d["kind"], classification, d["state"], format_text])
-            item.setData(0, Qt.UserRole, d["id"])
-            self.device_tree.addTopLevelItem(item)
-            combo = self.source if d["kind"] == "input" else self.destination
-            combo.addItem(label, d["id"])
-        for combo, ident in ((self.source, source_id), (self.destination, dest_id)):
-            index = combo.findData(ident)
-            if index >= 0:
-                combo.setCurrentIndex(index)
-        self.sync_route.blockSignals(True)
-        self.sync_route.clear()
-        for route in snapshot["routes"]:
-            source_name = self.view_devices.get(route["source_id"], {}).get("name", route["source_id"])
-            destination_name = self.view_devices.get(route["destination_id"], {}).get(
-                "name", route["destination_id"]
-            )
-            self.sync_route.addItem(f"{source_name} → {destination_name}", route["id"])
-        sync_index = self.sync_route.findData(sync_id)
-        if sync_index >= 0:
-            self.sync_route.setCurrentIndex(sync_index)
-        self.sync_route.blockSignals(False)
-        if not self.sync_delay.hasFocus():
-            self._sync_selection_changed()
-        self.route_tree.clear()
+            (source_rows if device["kind"] == "input" else destination_rows).append((device["id"], label))
+        self._update_tree(self.device_tree, device_rows)
+        self._update_combo(self.source, source_rows)
+        self._update_combo(self.destination, destination_rows)
+        self.inspect_device()
+        route_rows, sync_rows, metric_rows = [], [], []
+        sessions = snapshot["diagnostics"].get("telemetry", {}).get("sessions", [])
         for route in snapshot["routes"]:
             names = [
-                self.view_devices.get(route[k], {}).get("name", route[k])
-                for k in ("source_id", "destination_id")
+                self.view_devices.get(route[key], {}).get("name", route[key])
+                for key in ("source_id", "destination_id")
             ]
-            item = QTreeWidgetItem([*names, str(route["enabled"]), route["status"], route["error"]])
-            item.setData(0, Qt.UserRole, route["id"])
-            self.route_tree.addTopLevelItem(item)
-            item.setSelected(route["id"] == route_id)
-        self.virtual_tree.clear()
+            label = " → ".join(names)
+            route_rows.append((route["id"], [*names, str(route["enabled"]), route["status"], route["error"]]))
+            sync_rows.append((route["id"], label))
+            source = self.view_devices.get(route["source_id"], {})
+            native_source = (
+                source.get("properties", {}).get("capture_endpoint_id")
+                or source.get("monitor_of")
+                or route["source_id"]
+            )
+            session = next((s for s in sessions if s.get("source_id") == native_source), {})
+            output = next(
+                (d for d in session.get("devices", []) if d.get("id") == route["destination_id"]), {}
+            )
+            rate, block = session.get("sample_rate", 0), session.get("block_align", 0)
+            buffer_text = "—"
+            if rate and block and "fill_bytes" in output and "target_bytes" in output:
+                divisor = rate * block / 1000
+                buffer_text = (
+                    f"{output['fill_bytes'] / divisor:.1f} / {output['target_bytes'] / divisor:.1f} ms"
+                )
+            correction = (
+                f"{(output['sample_rate'] / rate - 1) * 1e6:+.0f} ppm"
+                if rate and output.get("sample_rate")
+                else "—"
+            )
+            state = route["status"]
+            if output.get("delay_adjusting"):
+                state += " / adjusting"
+            elif output.get("prebuffering"):
+                state += " / buffering"
+            metric_rows.append(
+                (
+                    route["id"],
+                    [
+                        label,
+                        state,
+                        f"{route.get('delay_ms', 0)} ms",
+                        buffer_text,
+                        correction,
+                        str(output.get("underflows", "—")),
+                    ],
+                )
+            )
+            if self._sync_edits.get(route["id"]) == route.get("delay_ms", 0):
+                self._sync_edits.pop(route["id"], None)
+        self._sync_edits = {key: value for key, value in self._sync_edits.items() if key in self.view_routes}
+        self._update_tree(self.route_tree, route_rows)
+        self._update_combo(self.sync_route, sync_rows)
+        self._sync_selection_changed()
+        self._update_tree(self.sync, metric_rows)
+        self.sync_summary.setText(
+            "Automatic clock drift compensation; acoustic alignment is unmeasured."
+            if sessions
+            else "No running native sessions. Configured delay is retained for stopped or pending routes."
+        )
+        virtual_rows = []
+        if self._vbcable_page:
+            for device in snapshot["devices"]:
+                props = device.get("properties", {})
+                if props.get("virtual_driver") == "VB-CABLE" and (
+                    device["kind"] == "output" or props.get("capture_endpoint_id")
+                ):
+                    virtual_rows.append(
+                        (
+                            device["id"],
+                            [
+                                device["name"],
+                                f"{device['kind']} / {device['channels'] or '?'} ch",
+                                device["state"],
+                                device["id"],
+                            ],
+                        )
+                    )
+            present = bool(virtual_rows)
+            self.vbcable_status.setText(
+                "VB-CABLE endpoints detected. Use CABLE Output as the route source."
+                if present
+                else "VB-CABLE endpoints are unavailable. Run A2Router setup, restart Windows, then refresh."
+            )
+            self.install_cable_button.setEnabled(
+                not present
+                and bool(self.install_cable_button.property("capable"))
+                and not (self.busy and not self._background)
+            )
         for config in snapshot["virtual_devices"]:
             ident = "sink:a2router_v_" + config["id"].replace("-", "")
             state = self.view_devices.get(ident, {}).get("state", "unavailable")
-            item = QTreeWidgetItem([config["name"], config["layout"], state, ident])
-            item.setData(0, Qt.UserRole, config["id"])
-            self.virtual_tree.addTopLevelItem(item)
-            item.setSelected(config["id"] == virtual_id)
-        self.diagnostics.setPlainText(json.dumps(snapshot["diagnostics"], indent=2))
-        self.sync.setPlainText(
-            json.dumps(
-                {
-                    "capabilities": snapshot["diagnostics"]["capabilities"],
-                    "native_telemetry": snapshot["diagnostics"].get("telemetry", {}),
-                    "configured_additional_delay_ms": {
-                        r["id"]: r.get("delay_ms", 0) for r in snapshot["routes"]
-                    },
-                    "reported_device_latency_us": {d["name"]: d["latency"] for d in snapshot["devices"]},
-                    "notes": "No measured acoustic alignment, end-to-end latency, or bit-perfect claim. Mixing can clip; reduce application volumes.",
-                },
-                indent=2,
-            )
-        )
+            if self._vbcable_page:
+                state = "Unsupported definition: VB-CABLE uses shared endpoints"
+            virtual_rows.append((config["id"], [config["name"], config["layout"], state, ident]))
+        self._update_tree(self.virtual_tree, virtual_rows)
+        self._update_text(self.diagnostics, json.dumps(snapshot["diagnostics"], indent=2))
 
     def closeEvent(self, event):
         if self.exit_ready:

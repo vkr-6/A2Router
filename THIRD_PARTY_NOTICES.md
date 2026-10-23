@@ -9,17 +9,17 @@ A2Router reuses and extends the Windows WASAPI engine from:
 
 Credit belongs to those authors for the original audio engine, buffering, drift compensation, telemetry and native frontends. Existing source comments and attribution are retained. No standalone license file was present in the imported MultiRoute checkout; this notice does not assign a new license to that code or establish redistribution rights beyond the upstream terms.
 
-## Microsoft Windows Driver Samples
+## VB-CABLE by VB-Audio Software
 
-`drivers/windows/a2router/` derives from Microsoft SimpleAudioSample at commit `bb68ed5e770bce04dc5395ec9258dafab034184d`:
+A2Router bundles the original, unchanged `VBCABLE_Driver_Pack45.zip` supplied by the project owner. VB-CABLE is programmed by V. Burel / JS-Loezic, copyright VB-Audio / Vincent Burel, 2010–2024, all rights reserved. It is proprietary donationware, not an A2Router-authored or open-source driver.
 
-https://github.com/microsoft/Windows-driver-samples/tree/bb68ed5e770bce04dc5395ec9258dafab034184d/audio/simpleaudiosample
+Origin: https://www.vb-cable.com/. Donations and license purchases are welcome: https://vb-audio.com/Services/licensing.htm. See `vendor/vbcable/NOTICE.txt` and the original `readme.txt` inside the ZIP. The published bundling permission applies when end users can identify VB-CABLE and donate/pay; professional contexts may require separate licenses. A+B and C+D are not bundled. Vendor files/signatures are not modified; no certificates or boot policy are changed by A2Router's installation code.
 
-Microsoft copyright notices are retained. This driver source is covered by the Microsoft Public License (MS-PL); its complete text is in [LICENSE-Microsoft.txt](drivers/windows/a2router/LICENSE-Microsoft.txt). [UPSTREAM.md](drivers/windows/a2router/UPSTREAM.md) records provenance and [driver documentation](drivers/windows/README.md) describes local modifications. The MS-PL applies to this component; it is not asserted as a license for the whole application.
+The prior Microsoft-derived custom driver has been removed and is no longer included in source or artifacts.
 
 ## Runtime and build dependencies
 
-Python, Qt/PySide6, shiboken6, PyInstaller and other dependencies retain their respective licenses. `tools/windows/collect_licenses.py` collects installed runtime license notices into portable build artifacts. A separately distributed driver package includes its Microsoft source license. Dependency versions are recorded in the portable bundle's `build-info.json`.
+Python, Qt/PySide6, shiboken6, PyInstaller and other dependencies retain their respective licenses. `tools/windows/collect_licenses.py` collects installed runtime license notices into portable build artifacts. The bundled VB-CABLE payload retains its original vendor license and notices. Dependency versions are recorded in the portable bundle's `build-info.json`.
 
 ## Development credit
 

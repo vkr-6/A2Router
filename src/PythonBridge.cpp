@@ -60,7 +60,7 @@ std::wstring friendlyName(IMMDevice* device) {
         name = value.pwszVal;
     PropVariantClear(&value); return name;
 }
-std::string managedInstance(IMMDevice* device) {
+std::string vbCableInstance(IMMDevice* device) {
     ComPtr<IPropertyStore> properties;
     if (FAILED(device->OpenPropertyStore(STGM_READ, &properties))) return {};
     PROPVARIANT value; PropVariantInit(&value);
@@ -71,10 +71,12 @@ std::string managedInstance(IMMDevice* device) {
     DEVINST node = 0;
     if (id.empty() || CM_Locate_DevNodeW(&node, id.data(), CM_LOCATE_DEVNODE_NORMAL) != CR_SUCCESS) return {};
     for (int depth = 0; depth < 16; ++depth) {
-        wchar_t current[MAX_DEVICE_ID_LEN]{};
-        if (CM_Get_Device_IDW(node, current, MAX_DEVICE_ID_LEN, 0) != CR_SUCCESS) break;
-        const std::wstring prefix = L"ROOT\\A2ROUTER\\";
-        if (_wcsnicmp(current, prefix.c_str(), prefix.size()) == 0) return utf8(current + prefix.size());
+        wchar_t service[512]{}; ULONG length = sizeof(service), type = 0;
+        if (CM_Get_DevNode_Registry_PropertyW(node, CM_DRP_SERVICE, &type, service, &length, 0) == CR_SUCCESS
+                && type == REG_SZ && _wcsicmp(service, L"VBAudioVACMME") == 0) {
+            wchar_t instance[MAX_DEVICE_ID_LEN]{};
+            if (CM_Get_Device_IDW(node, instance, MAX_DEVICE_ID_LEN, 0) == CR_SUCCESS) return utf8(instance);
+        }
         DEVINST parent = 0;
         if (CM_Get_Parent(&parent, node, 0) != CR_SUCCESS) break;
         node = parent;
@@ -84,8 +86,8 @@ std::string managedInstance(IMMDevice* device) {
 void writeDevice(std::ostream& out, IMMDevice* device, const std::wstring& name, bool input, bool isDefault) {
     out << "{\"id\":" << quote(utf8(deviceId(device))) << ",\"name\":" << quote(utf8(name))
         << ",\"kind\":" << quote(input ? "input" : "output") << ",\"default\":" << (isDefault ? "true" : "false");
-    const auto managed = managedInstance(device);
-    if (!managed.empty()) out << ",\"virtual\":true,\"properties\":{\"a2router_instance\":" << quote(managed) << '}';
+    const auto cable = vbCableInstance(device);
+    if (!cable.empty()) out << ",\"virtual\":true,\"properties\":{\"virtual_driver\":\"VB-CABLE\",\"feedback_group\":" << quote("vbcable:" + cable) << '}';
     ComPtr<IAudioClient> client;
     if (SUCCEEDED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
             reinterpret_cast<void**>(client.GetAddressOf())))) {
@@ -172,7 +174,7 @@ void writeStats(std::ostream& out, const std::wstring& source, const Session& se
     const auto stats = session.engine->stats();
     out << "{\"source_id\":" << quote(utf8(source)) << ",\"capture_from_input\":" << (session.input ? "true" : "false")
         << ",\"running\":" << (session.engine->isRunning() ? "true" : "false")
-        << ",\"sample_rate\":" << stats.mix_sample_rate << ",\"capture_poll_timeouts\":" << stats.capture_poll_timeouts << ",\"devices\":[";
+        << ",\"sample_rate\":" << stats.mix_sample_rate << ",\"block_align\":" << stats.mix_block_align << ",\"capture_poll_timeouts\":" << stats.capture_poll_timeouts << ",\"devices\":[";
     bool first = true;
     for (const auto& device : stats.devices) {
         if (!first) out << ',';
@@ -194,7 +196,7 @@ void writeStats(std::ostream& out, const std::wstring& source, const Session& se
 }
 #define API extern "C" __declspec(dllexport)
 API int ar_api_version() { return 2; }
-API int ar_virtual_discovery_version() { return 1; }
+API int ar_vbcable_discovery_version() { return 1; }
 API const char* ar_error() { return error.c_str(); }
 API const char* ar_devices() {
     std::lock_guard<std::mutex> lock(apiMutex);
@@ -240,6 +242,23 @@ API int ar_source_start_delays(const wchar_t* source, int input, const wchar_t* 
     try {
         if (!source || !*source || !delays) { error = "Source and delay list required"; return 0; }
         return startSession(source, input != 0, ids, delays) ? 1 : 0;
+    } catch (const std::exception& exc) { error = exc.what(); return 0; }
+}
+API int ar_source_set_delay(const wchar_t* source, int input, const wchar_t* destination, int64_t delayMs) {
+    std::lock_guard<std::mutex> lock(apiMutex);
+    try {
+        if (!source || !destination) { error = "Source and destination are required"; return 0; }
+        auto found = sessions.find(source);
+        if (found == sessions.end() || found->second.input != (input != 0)) {
+            error = "Native source session is not running"; return 0;
+        }
+        const auto stats = found->second.engine->stats();
+        for (size_t i = 0; i < stats.devices.size(); ++i) {
+            if (stats.devices[i].endpoint_id == destination) {
+                return found->second.engine->setDeviceDelay(static_cast<int>(i), delayMs, error) ? 1 : 0;
+            }
+        }
+        error = "Destination is not in this source session"; return 0;
     } catch (const std::exception& exc) { error = exc.what(); return 0; }
 }
 API int ar_start(const wchar_t* ids) {

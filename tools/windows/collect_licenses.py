@@ -35,9 +35,9 @@ def main():
         "packages": versions,
         "native_bridge_api": 2,
         "virtual_endpoint_driver": (
-            "included; signature and playback unverified"
-            if (destination / "driver" / "A2RouterAudio.inf").exists()
-            else "not included; install a separately built/signed package"
+            "VB-CABLE included unchanged; installation and playback unverified"
+            if (destination / "vendor" / "vb-cable" / "VBCABLE_Setup_x64.exe").exists()
+            else "VB-CABLE payload absent"
         ),
     }
     (destination / "build-info.json").write_text(json.dumps(data, indent=2), encoding="utf-8")

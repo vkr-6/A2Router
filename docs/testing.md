@@ -28,7 +28,7 @@ powershell -ExecutionPolicy Bypass -File tools/windows/build-portable.ps1
 
 Outputs are generated in `dist/windows-x64/` and `dist/a2router-windows-x64.zip`; intermediate Windows files default to `%LOCALAPPDATA%\a2router-build`. Use `-Workspace C:\your\build-folder` to choose their location. No compiler downloads or VM are needed when Visual Studio is installed.
 
-In the GUI inspect devices, then test an output loopback to another output using low-volume audio. Avoid routes that return audio to its source. Microphone monitoring needs explicit confirmation; use headphones to avoid feedback. Verify enable/disable, multiple destinations and configuration restoration on your hardware. Windows virtual device creation needs the included driver to be built and signed; see `drivers/windows/README.md`. The VM-only PCM test is opt-in and is not intended for ordinary desktops.
+In the GUI inspect devices, then test an output loopback to another output using low-volume audio. Avoid routes that return audio to its source. Microphone monitoring needs explicit confirmation; use headphones to avoid feedback. Verify enable/disable, multiple destinations and configuration restoration on your hardware. Windows virtual audio uses the unchanged VB-CABLE package bundled by A2Router setup; see `drivers/windows/README.md`. Actual installation requires a separate target-machine check. The VM-only PCM test is opt-in and is not intended for ordinary desktops.
 
 ## Native Linux / PipeWire
 

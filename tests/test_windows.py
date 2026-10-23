@@ -157,3 +157,84 @@ def test_frozen_library_path(monkeypatch, tmp_path):
     override = tmp_path / "custom.dll"
     monkeypatch.setenv("A2ROUTER_WASAPI_DLL", str(override))
     assert windows.library_path() == override
+
+
+class DelayBridge(Bridge):
+    def __init__(self):
+        super().__init__()
+        self.live_changes = []
+        self.reject_live = False
+
+    def ar_source_start_delays(self, source, capture_input, ids, delays):
+        return self.ar_source_start(source, capture_input, ids)
+
+    def ar_source_set_delay(self, source, capture_input, destination, delay):
+        if self.reject_live:
+            return 0
+        self.live_changes.append((source, capture_input, destination, delay))
+        return 1
+
+
+def test_live_delay_does_not_restart_on_next_refresh():
+    bridge = DelayBridge()
+    backend = WindowsBackend(bridge)
+    backend.refresh()
+    route = backend.create_route("wasapi-loopback:default", "headphones")
+    starts = len(bridge.starts)
+    backend.set_route_delay(route.id, 30, allow_restart=False)
+    backend.refresh()
+    assert route.delay_ms == 30
+    assert len(bridge.starts) == starts
+    assert bridge.live_changes == [("default", 0, "headphones", 30)]
+
+
+def test_live_delay_failure_preserves_state_without_restart():
+    bridge = DelayBridge()
+    backend = WindowsBackend(bridge)
+    backend.refresh()
+    route = backend.create_route("wasapi-loopback:default", "headphones")
+    starts = len(bridge.starts)
+    bridge.reject_live = True
+    with pytest.raises(BackendError):
+        backend.set_route_delay(route.id, 900, allow_restart=False)
+    assert route.delay_ms == 0 and len(bridge.starts) == starts
+    backend.set_route_delay(route.id, 900, allow_restart=True)
+    assert route.delay_ms == 900 and len(bridge.starts) > starts
+
+
+class CableBridge(Bridge):
+    def ar_devices(self):
+        devices = json.loads(super().ar_devices())
+        for ident, kind in (("cable-in", "output"), ("cable-16", "output"), ("cable-out", "input")):
+            devices.append(
+                {
+                    "id": ident,
+                    "name": ident,
+                    "kind": kind,
+                    "channels": 2,
+                    "positions": ["front-left", "front-right"],
+                    "properties": {"virtual_driver": "VB-CABLE", "feedback_group": "vbcable:one"},
+                    "virtual": True,
+                    "sample_rate": 48000,
+                }
+            )
+        return json.dumps(devices).encode()
+
+
+def test_vbcable_capture_and_feedback_share_one_cable():
+    bridge = CableBridge()
+    backend = WindowsBackend(bridge)
+    backend.refresh()
+    route = backend.create_route("cable-out", "headphones")
+    assert route.status == "connected"
+    assert bridge.starts[-1] == ("cable-out", 1, ["headphones"])
+    for source in ("cable-out", "wasapi-loopback:cable-in"):
+        for destination in ("cable-in", "cable-16"):
+            with pytest.raises(BackendError, match="Feedback"):
+                backend.create_route(source, destination)
+    with pytest.raises(BackendError, match="Feedback"):
+        backend.create_route("wasapi-loopback:headphones", "cable-in")
+    with pytest.raises(BackendError, match="driver"):
+        backend.create_virtual_device({"name": "Not another cable"})
+    with pytest.raises(BackendError, match="shared driver"):
+        backend.remove_virtual_device("cable-in")

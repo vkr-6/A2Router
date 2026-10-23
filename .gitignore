@@ -46,3 +46,6 @@ htmlcov/
 /progress.md
 .DS_Store
 Thumbs.db
+
+# Original vendor package, intentionally shipped unchanged
+!/vendor/vbcable/VBCABLE_Driver_Pack45.zip

@@ -9,7 +9,7 @@ $ProgressPreference = 'SilentlyContinue'
 $source = (Resolve-Path "$PSScriptRoot\..\..").ProviderPath
 New-Item -ItemType Directory -Force $Workspace | Out-Null
 # Work on a task-owned local copy; UNC workdirs can break native build tools.
-foreach ($folder in @('a2router', 'src', 'tests', 'tools')) {
+foreach ($folder in @('a2router', 'src', 'tests', 'tools', 'vendor')) {
     & robocopy "$source\$folder" "$Workspace\$folder" /E /R:2 /W:1 /XD __pycache__ .pytest_cache .ruff_cache /NFL /NDL /NJH /NJS
     if ($LASTEXITCODE -ge 8) { throw "Copy failed: $folder" }
 }
@@ -91,7 +91,7 @@ Remove-Item Env:\A2ROUTER_WASAPI_DLL -ErrorAction SilentlyContinue
 if (Test-Path "$Workspace\dist") { Remove-Item "$Workspace\dist" -Recurse -Force }
 New-Item -ItemType Directory -Force "$Workspace\dist" | Out-Null
 foreach ($entry in @(@('a2router','--windowed'), @('a2router-cli','--console'))) {
-    & $python -m PyInstaller --noconfirm --clean --onefile $entry[1] --name $entry[0] --paths $Workspace --add-binary "$native\a2router_wasapi.dll;." --add-binary "$native\a2router_device_manager.exe;." --distpath "$Workspace\dist" --workpath "$Workspace\build\pyinstaller" --specpath "$Workspace\build" tools\windows\portable_entry.py
+    & $python -m PyInstaller --noconfirm --clean --onefile $entry[1] --name $entry[0] --paths $Workspace --add-binary "$native\a2router_wasapi.dll;." --distpath "$Workspace\dist" --workpath "$Workspace\build\pyinstaller" --specpath "$Workspace\build" tools\windows\portable_entry.py
     if ($LASTEXITCODE) { throw "Freezing failed: $($entry[0])" }
 }
 if (!$SkipTests) {
@@ -114,11 +114,10 @@ if (!$SkipTests) {
     }
     Remove-Item Env:\QT_QPA_PLATFORM -ErrorAction SilentlyContinue
 }
-$driver = "$source\build\windows-driver\package"
-if (Test-Path "$driver\A2RouterAudio.inf") {
-    New-Item -ItemType Directory -Force "$Workspace\dist\driver" | Out-Null
-    Copy-Item "$driver\*" "$Workspace\dist\driver" -Recurse -Force
-}
+& $python "$source\tools\windows\prepare_vbcable.py" "$source\vendor\vbcable\VBCABLE_Driver_Pack45.zip" "$Workspace\dist\vendor\vb-cable"
+if ($LASTEXITCODE) { throw 'VB-CABLE package verification failed' }
+Copy-Item "$source\vendor\vbcable\NOTICE.txt" "$Workspace\dist\vendor\VB-CABLE-NOTICE.txt" -Force
+Copy-Item "$source\tools\windows\install-vbcable.ps1" "$Workspace\dist\vendor\install-vbcable.ps1" -Force
 & $python tools\windows\collect_licenses.py "$Workspace\dist"
 if ($LASTEXITCODE) { throw 'Runtime license collection failed' }
 Copy-Item "$source\tools\windows\PORTABLE.txt" "$Workspace\dist\README.txt" -Force
@@ -130,7 +129,7 @@ Copy-Item "$Workspace\dist\*" $out -Recurse -Force
 $nativeOut = "$source\dist\windows-native"
 if (Test-Path $nativeOut) { Remove-Item $nativeOut -Recurse -Force }
 New-Item -ItemType Directory -Force $nativeOut | Out-Null
-Copy-Item "$native\a2router_wasapi.dll", "$native\a2router_device_manager.exe", "$native\a2router_cli.exe" $nativeOut -Force
+Copy-Item "$native\a2router_wasapi.dll", "$native\a2router_cli.exe" $nativeOut -Force
 foreach ($name in @('a2router_core_test.exe','a2router_wasapi_probe.exe')) {
     if (Test-Path "$native\$name") { Copy-Item "$native\$name" $nativeOut -Force }
 }

@@ -1,54 +1,29 @@
-# A2Router Windows virtual output driver
+# Windows virtual audio: VB-CABLE
 
-Status: **UNTESTED**. Source implementation only; no signed driver binary is included. No Windows build, driver deployment or audio tests were executed for this change, at the user's request.
+The former custom WDK/SimpleAudioSample driver, native root-device manager and unsigned-driver build have been removed. A2Router uses the supplied, original **VBCABLE_Driver_Pack45.zip** by VB-Audio Software.
 
-This project vendors Microsoft's minimal WaveRT `SimpleAudioSample` driver at the pinned revision recorded in `a2router/UPSTREAM.md`, with its MS-PL license and original copyright notices. It exposes a genuine Windows render endpoint through PortCls. It is not a Python-only device or an app-local list entry.
+## Package and attribution
 
-Local adaptations:
+- Archive: `vendor/vbcable/VBCABLE_Driver_Pack45.zip` (unchanged).
+- SHA-256: `b950e39f01af1d04ea623c8f6d8eb9b6ea5c477c637295fabf20631c85116bfb`.
+- Official origin: https://www.vb-cable.com/
+- Donationware: donations and license purchases are welcome at https://vb-audio.com/Services/licensing.htm.
+- Original end-user license is retained inside the ZIP as `readme.txt` and displayed by A2Router setup. See `vendor/vbcable/NOTICE.txt` for distribution conditions, including professional deployments. No A+B/C+D package is included.
 
-- Own `A2RouterAudio` service, binary and catalog names, independent of the upstream sample.
-- Own hardware ID `ROOT\A2RouterAudio`; owned instances `ROOT\A2ROUTER\<UUID without dashes>`.
-- Render-only endpoint. Synthetic microphone registration and the sample's tone-generating capture endpoint are not installed.
-- Debug audio recording and its process-global worker setup are disabled. Adapter singleton restriction is removed so each created root instance can own an independent render endpoint.
-- No hardware loopback pin: Windows shared-mode software loopback is the intended capture path for routing rendered audio through the existing engine. Signal transport has not been verified.
-- Initially **stereo, 48,000 Hz, 16-bit PCM** only, matching the actual native format table. Mono/surround options remain unavailable on this driver.
-- INF targets Windows 10 build 19041 and later; OS/WDK compatibility remains unverified.
+## Build and installation
 
-## Build on Windows
+1. Build the normal native WASAPI bridge and portable Python/Qt app using `tools/windows/build-portable.ps1`. No WDK is needed.
+2. That script verifies the archive hash and extracts all vendor files without modifying them into `dist/windows-x64/vendor/vb-cable`.
+3. Run `tools/windows/build-setup.ps1` with Inno Setup 6.3+ installed. It checks the vendor installer signature and creates `dist/setup/A2Router-Setup-x64.exe`.
+4. Run setup on the target Windows x64 machine. Its checked-by-default VB-CABLE task runs the original installer if the base cable is absent, with administrator approval. Existing healthy installations are left untouched.
+5. New driver installation needs a restart. Problems are logged to `%TEMP%\A2Router-VBCABLE-install.log`; failed driver installation is reported as a failure, not assumed successful from a vendor exit code. Neither certificate stores nor boot/security policy are changed.
 
-Install Visual Studio C++ Build Tools, matching Windows SDK/WDK, and the WDK Visual Studio extension. In a developer PowerShell from the A2Router project root:
+The GitHub workflow remains manual-only. Its `build_setup` input now builds the complete installer instead of an unsigned custom driver. Application uninstallation offers shared-driver removal, with a default based on the recorded installation owner. Pre-existing drivers are never removed silently. Use `/REMOVEVBCABLE=1` to request driver removal during silent uninstall. Failure keeps A2Router/vendor files available for repair. Windows may automatically choose new defaults when installing a driver; review Sound settings afterward. A2Router itself does not select default speakers/microphones.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File tools/windows/build-driver.ps1
-cmake -S . -B build -A x64
-cmake --build build --config Release
-```
+## Routing and limitations
 
-The driver script copies source to ignored `build/windows-driver/source/` before building. It writes `A2RouterAudio.inf`, `.sys`, `.cat` and the Microsoft license to `build/windows-driver/package/`. A normal application-only build does not require WDK. Never edit the INF after its catalog is signed.
+The base package provides one shared cable, with playback endpoints **CABLE Input** / **CABLE In 16 Ch** and recording endpoint **CABLE Output**. These playback alternatives are not independent named cables. Send source applications to CABLE Input, then select CABLE Output in A2Router as a route source. The native bridge identifies the vendor PnP service rather than inventing endpoints from display names. Reported current formats/layouts come from Windows. VB-CABLE's own control panel manages its internal format/latency options.
 
-The default driver build is unsigned. Production Windows requires Microsoft-accepted driver signing. For a separately prepared development machine, a test-signed package may be used according to Microsoft's driver deployment guidance. The script deliberately does not change boot security, enable test signing, generate/import certificates, or install a driver. Optional `-CertificateThumbprint` selects an existing WDK test-signing certificate; it does not make a test signature production-valid.
+The recording endpoint is captured directly with WASAPI; real output-monitor sources remain WASAPI loopbacks. Shared-cable feedback groups prevent routing a cable's recording/monitor stream back to either of its playback endpoints. Independent source sessions and physical-output fan-out still use the preserved MultiRoute engine.
 
-## Create devices
-
-Place a valid signed package in `build/windows-driver/package/`, or set `A2ROUTER_DRIVER_INF` to its INF. Rebuild both the WASAPI DLL and `a2router_device_manager.exe`. Launch the GUI, open Virtual devices, enter a name and create a stereo output. The controller requests UAC elevation for the native helper; ordinary routing remains unelevated. Windows checks package acceptance during installation. A missing package/helper leaves creation disabled with a setup explanation.
-
-The helper creates a deterministic root devnode, binds only that node to the INF, waits for an active MMDevice endpoint and sets its Windows friendly name. It rolls back a newly created node on installation/endpoint verification failure; a restart-required result is reported separately. It never sets default speakers or microphones. Device removal only targets the exact A2Router-owned instance and hardware ID, and refuses while managed routes depend on it. Removing one device does not remove the shared driver package or other instances.
-
-The endpoint appears to other compatible Windows applications after successful installation. Select it as their output, then select its monitor in A2Router and add physical-output routes. Device definitions retain stable application IDs across restarts; native endpoint IDs are resolved from actual device ancestry.
-
-For portable packaging, build the driver package first, then run `tools/windows/build-portable.ps1`. The helper is bundled; the optional package is copied beside the EXE in `driver/`. A portable EXE alone cannot replace a kernel driver or bypass Windows signing policy. Inspect `%WINDIR%\inf\setupapi.dev.log` if Windows rejects installation.
-
-Official references:
-
-- https://github.com/microsoft/Windows-driver-samples/tree/bb68ed5e770bce04dc5395ec9258dafab034184d/audio/simpleaudiosample
-- https://learn.microsoft.com/windows-hardware/drivers/install/driver-signing
-
-## GitHub Actions
-
-The main workflow runs only through **Actions → A2Router build → Run workflow**, with an optional `build_driver` input. Pushes and pull requests do not start it. It restores matching WDK/SDK NuGet packages pinned to `10.0.26100.6584` and uploads `A2Router-driver-x64-UNSIGNED`. The driver package is separate from the portable application artifact. Local NuGet builds use `tools/windows/build-driver.ps1 -UseNuGet` with a Visual Studio developer shell and NuGet CLI. These workflow changes have not been dispatched here. An unsigned CI output is not ready for installation on a normal Windows system.
-
-NuGet builds explicitly resolve host-compatible StampInf, Inf2Cat and SignTool directories from the pinned packages before starting MSBuild. `StampInfToolPath` and `Inf2CatToolPath` are passed as MSBuild properties, and the tool directories are temporarily added to PATH. Tool selection follows the build host architecture, independently of the driver target; this accommodates the kit's x86-only Inf2Cat. The original PATH is restored after the build. Missing tools now fail with their expected package location instead of a later TRK0005 error.
-
-### Validator architecture
-
-The pinned WDK ships the in-process InfVerif DLL and ApiValidator for x64/ARM64, not x86. The GitHub driver job therefore selects **x64 MSBuild** explicitly. The script also resolves the `amd64/MSBuild.exe` sibling when invoked from a VS shell whose PATH selects x86 MSBuild, and fails before restore if no x64 executable is available. `PreferredToolArchitecture`, `ApiValidator_Arch` and `ApiExtractor_Arch` are set to x64. StampInf, Inf2Cat, signing tools, native InfVerif, ApiValidator and AitStatic locations are verified before compilation. INF/package verification and API validation remain enabled; no skip flags are used. This corrects the x86 validator-loading errors from the reported CI run, but the complete updated pipeline still needs a rerun.
+No driver installation is performed during builds/tests or on ordinary application launch. The setup and physical signal paths must be validated on a target machine; package signature/ZIP integrity checks are not audio playback verification.

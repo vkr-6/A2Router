@@ -11,9 +11,9 @@ A compact desktop application for routing audio from multiple sources to multipl
 - Save and restore versioned JSON configurations and profiles, retaining unavailable-device definitions.
 - Linux: real PipeWire virtual outputs through `pipewire-pulse`, with mono, stereo, 5.1 and 7.1 layouts; owned-resource cleanup and reconnection support.
 - Windows: reuse MultiRoute's WASAPI engine for input capture and output loopbacks, with native drift compensation and telemetry.
-- Windows source additions: render-only virtual audio driver and UAC device manager; persisted additional route delay on the Synchronization page.
+- Windows uses the original VB-CABLE base package by VB-Audio for the virtual cable, with live native delay adjustment, persisted requests and readable buffering/drift metrics.
 
-**Windows virtual-device creation and the new delay-control path are UNTESTED.** Driver creation needs an accepted signed package; building a portable EXE does not install or sign a driver. The included driver exposes only stereo, 48 kHz, 16-bit PCM. Windows audio signal transport and physical-device/acoustic synchronization remain unverified. Linux virtual-graph PCM transport was verified in earlier isolated-server tests; this does not establish physical-hardware playback coverage. See [verification scope](docs/verification.md).
+**The setup/install and audio hardware paths need verification on a Windows target.** A2Router setup bundles the original signed VB-CABLE installer; it does not build a custom driver. The base package supplies one shared cable, not arbitrary named devices. Supported active channel layouts/formats are read from Windows. Windows audio signal transport and physical-device/acoustic synchronization remain unverified. Linux virtual-graph PCM transport was verified in earlier isolated-server tests; this does not establish physical-hardware playback coverage. See [verification scope](docs/verification.md).
 
 ## Build with GitHub Actions
 
@@ -23,14 +23,14 @@ Push this source tree to your repository. The [A2Router build workflow](.github/
 |---|---|
 | Windows x64 portable application | Builds the native engine/helper, runs native and Python checks, packages GUI and CLI EXEs, and performs clearly labelled simulated offscreen startup checks |
 | Linux | Python lint/format checks, Python and native tests, isolated real PipeWire integration |
-| Optional Windows driver | Manual run with **build_driver** enabled; builds an **unsigned** WDK driver package using pinned matching NuGet SDK/WDK packages |
+| Windows setup (default enabled) | With **build_setup** enabled, compiles an Inno Setup EXE containing the original VB-CABLE package; installs it automatically when absent |
 
 After a successful run, download from the run's **Artifacts** section:
 
 - **A2Router-windows-x64**: portable GUI/CLI, checksums, runtime notices and build reports. Launch `a2router.exe` after extracting.
 - **A2Router-windows-x64-zip**: the same portable application in a distributable ZIP.
 - **A2Router-windows-native**: WASAPI DLL, device manager, native CLI and diagnostic tools.
-- **A2Router-driver-x64-UNSIGNED**: optional driver INF/SYS/CAT and license. It is separate from the application artifact and cannot load on ordinary production Windows without accepted signing.
+- **A2Router-Setup-x64**: Windows installer, with the original signed VB-CABLE package, vendor license/attribution, checked-by-default driver task, existing-install detection and restart handling.
 
 Hosted Windows runners use the simulated backend for packaged GUI checks and load the actual DLL to verify its ABI. Endpoint-dependent tests are skipped there; local non-headless builds can run endpoint discovery checks. Hosted runners do not prove real speaker playback, microphone capture quality or acoustic synchronization. The workflow does not install drivers, enable test signing, change audio defaults, or publish a release. The updated workflow has not been dispatched during source preparation.
 
@@ -84,21 +84,29 @@ powershell -ExecutionPolicy Bypass -File tools/windows/build-portable.ps1
 
 Outputs are `dist/windows-x64/` and `dist/a2router-windows-x64.zip`. The script uses `%LOCALAPPDATA%\a2router-build` for temporary work, or the directory supplied with `-Workspace`. `-Headless` uses simulated packaged smoke checks, skips endpoint-dependent tests and omits native desktop startup; `-SkipTests` skips automated and packaged smoke checks. No Python installation is needed to run the packaged EXEs.
 
-### Windows virtual outputs
+### Windows setup and VB-CABLE
 
-The driver source and complete requirements are in [drivers/windows/README.md](drivers/windows/README.md). Build with a matching WDK/SDK installation, or restore pinned NuGet kits from a developer shell with NuGet CLI:
+After building the portable EXEs, compile the setup file using Inno Setup 6.3 or later:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools/windows/build-driver.ps1 -UseNuGet
+powershell -ExecutionPolicy Bypass -File tools/windows/build-setup.ps1
 ```
 
-The package is written to `build/windows-driver/package/`. **It is unsigned by default.** Production deployment requires Microsoft-accepted signing; development deployment needs a separately prepared target. The build scripts do not change boot/security settings or import certificates.
+Output: `dist/setup/A2Router-Setup-x64.exe`. GitHub's manual workflow builds this when **build_setup** is selected (enabled by default). Setup bundles all vendor files unchanged from the supplied `VBCABLE_Driver_Pack45.zip`; the original ZIP is retained in source. The package hash is pinned and its vendor installer's Authenticode signature is checked. The custom WDK driver, device-creation helper and unsigned-driver workflow have been removed.
 
-With a valid signed package, the rebuilt native helper and bridge, launch the GUI and create a stereo output. Creation/removal requests UAC approval. `A2ROUTER_DRIVER_INF` can select another package location. For a portable app, put the valid package in `driver/` beside the EXE. Do not modify a signed INF. Other compatible applications can select the endpoint only after Windows successfully installs and activates it.
+The default setup task installs VB-CABLE only when absent, with administrator approval. It leaves existing healthy installations unchanged, reports driver failures, and offers a Windows restart after new installation. You can deselect the task. Windows may choose new default sound devices during driver installation: check Sound settings after restarting. A2Router does not explicitly set defaults. A2Router uninstall offers to remove VB-CABLE too. It defaults to removal for a driver installed by A2Router, and to keeping a pre-existing driver; the user can choose either. Driver removal uses the vendor uninstaller and requests a restart. Silent uninstall keeps the driver unless `/REMOVEVBCABLE=1` is explicitly supplied.
 
-### Windows synchronization
+**VB-CABLE is donationware by [VB-Audio Software](https://www.vb-cable.com/). Donations and license purchases are welcome.** See [licensing and bundling terms](https://vb-audio.com/Services/licensing.htm); professional deployments may need separate licenses. Original copyright, vendor branding and license files remain intact. A+B and C+D cables are not included.
 
-After rebuilding the bridge, select a route on **Synchronization**, set its additional software delay and apply. The setting is persisted; applying it briefly restarts all destinations of that source. Existing per-output drift compensation remains automatic. The page reports native buffering, rate adjustment and error telemetry. A fixed delay alone cannot remove hardware clock drift, and precise acoustic alignment requires measurement.
+Select **CABLE Input** as an application's playback device. In A2Router route **CABLE Output** (the recording side) to speakers/headphones. The Virtual devices page displays the actual VB-CABLE endpoints instead of offering fake named-device creation. The 16-channel alternative playback endpoint belongs to the same cable; routing its capture/monitor back to either cable input is blocked as feedback. No driver is installed on application startup or during CI checks.
+
+See [VB-CABLE integration](drivers/windows/README.md).
+
+### Synchronization and stable refresh
+
+Select a route on **Synchronization**, edit the additional delay, then Apply. Draft values survive focus changes and periodic refreshes; Discard restores the saved request. Native live-delay adjustment is used within the current buffer. A larger adjustment can restart that source only if **Allow a source restart** is selected. The page shows route state, requested delay, actual buffer/target, rate correction and underruns. Existing native drift compensation remains automatic; acoustic alignment still requires measurement.
+
+Periodic refresh updates changed cells in place, preserving selections and scroll positions. It does not rebuild lists, flash the Updating message or disable controls. A click made while polling is queued instead of discarded. Polling does not restart healthy routes.
 
 See [Windows details](docs/windows.md) and [clean-machine testing](docs/testing.md).
 
@@ -141,14 +149,15 @@ On Windows use `--config Release` for the build and `-C Release` for CTest. For 
 dbus-run-session -- python tests/run_private_pipewire.py
 ```
 
-Standard tests skip opt-in real-audio cases. Mock success and a successful CI build do not establish hardware audio or driver correctness. The newest Windows driver and delay changes have not been built or runtime-tested locally.
+Standard tests skip opt-in real-audio cases. Mock success and a successful CI build do not establish hardware audio or driver correctness. Windows hardware playback and actual driver installation need target-machine validation.
 
 ## Source structure
 
 ```text
 a2router/              Qt UI, controller, configuration, platform backends
 src/                   MultiRoute WASAPI engine, C ABI bridge, device helper
-drivers/windows/       Microsoft-derived render-only driver source and license
+vendor/vbcable/        Original VB-CABLE archive, checksum enforcement and notices
+drivers/windows/       VB-CABLE integration documentation
 tests/                 Python, C++ and opt-in audio integration tests
 tools/windows/         Reproducible application/driver builds and diagnostics
 docs/                  Platform setup, architecture and verification scope
@@ -162,7 +171,7 @@ THIRD_PARTY_NOTICES.md  Upstream attribution and dependency notices
 
 - **[vkr-6/MultiRoute](https://github.com/vkr-6/MultiRoute)** — source repository used as the foundation for A2Router's Windows engine.
 - **[FulminataXII/MultiRoute](https://github.com/FulminataXII/MultiRoute)** — original upstream audio-routing project. Credit to its authors for the WASAPI engine, ring buffers, drift controllers, telemetry and original frontends.
-- **[Microsoft Windows Driver Samples](https://github.com/microsoft/Windows-driver-samples)** — the included virtual driver derives from SimpleAudioSample. Original notices and its [Microsoft Public License](drivers/windows/a2router/LICENSE-Microsoft.txt) are retained; the exact revision is in [UPSTREAM.md](drivers/windows/a2router/UPSTREAM.md).
+- **[VB-Audio Software](https://www.vb-cable.com/)** — VB-CABLE virtual audio driver by Vincent Burel / JS-Loezic. The original Pack45 ZIP and vendor license are preserved unchanged. VB-CABLE is donationware; contributions are welcome.
 - **OpenAI Codex** — AI coding assistant used to develop the A2Router application additions, Linux backend, Qt interface, configuration handling, Windows integration, driver adaptation, documentation and workflows under the project owner's direction. This development credit does not replace upstream authorship or imply verified correctness.
 
-No standalone license file was present in the imported MultiRoute checkout. A2Router does not assign a new blanket license to that existing engine. The MS-PL applies to the imported Microsoft driver component. See [third-party notices](THIRD_PARTY_NOTICES.md) for attribution and component licensing. Original [MultiRoute documentation](docs/upstream-windows.md) is retained.
+No standalone license file was present in the imported MultiRoute checkout. A2Router does not assign a new blanket license to that existing engine. VB-CABLE retains its own proprietary donationware license; it is not A2Router-authored code. See [third-party notices](THIRD_PARTY_NOTICES.md) for attribution and component licensing. Original [MultiRoute documentation](docs/upstream-windows.md) is retained.

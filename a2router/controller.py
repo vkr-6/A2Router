@@ -32,6 +32,8 @@ class Controller:
         self.backend.refresh()
         created = False
         for config in self.virtual_definitions.values():
+            if not self.backend.capabilities()["virtual_devices"]:
+                continue  # Keep unsupported definitions without retrying an impossible operation each poll.
             if config.id not in self.backend.virtual_devices:
                 try:
                     self.backend.create_virtual_device(config)

@@ -1,36 +1,25 @@
-# Windows integration and portable build
+# Windows backend
 
-The existing WASAPI engine, ring buffers, drift controllers and telemetry are reused. Targeted engine changes add explicit capture endpoint selection and physical-input capture. The API v2 bridge enumerates input/output endpoints and supports multiple independent capture sessions, each feeding multiple outputs; shared-mode Windows audio provides mixing. Changing destinations restarts only the affected source. ctypes loads the bundled native DLL in packaged builds.
+A2Router preserves MultiRoute's WASAPI engine, native SPSC buffers, per-output drift controllers and telemetry. Python controls native source sessions through a C ABI; audio samples never pass through Python. Inputs and output loopbacks are enumerated with reported active formats. Windows shared-mode mixing/rate conversion can alter samples; bit-perfect transport and acoustic alignment are unverified.
 
-The backend validates IDs, capture direction and layouts, prevents feedback/duplicates, isolates source failures, supports route enable/disable and restores desired routes after refresh. Its source selections include input endpoints and active output loopbacks. An output loopback is not a newly installed virtual device. Shared-mode PCM conversion and mono-to-stereo duplication may occur; bit-perfect audio and acoustic synchronization are unverified.
+## VB-CABLE
 
-## Verified on Windows 11, 2026-10-20
+Windows virtual audio uses the original VB-Audio base cable package. No custom driver or root-device-creation code remains. See [VB-CABLE setup](../drivers/windows/README.md) for archive provenance, licensing, automatic setup installation, restart and failure behavior. The GUI shows actual cable endpoints and a vendor installer shortcut when its payload is available. It does not pretend this package can create multiple named cables or remove a shared driver automatically.
 
-- MSVC C++20 Release build: engine, bridge DLL, native CLI and probe compiled.
-- CTest: **2/2 passed**, including real WASAPI endpoint enumeration.
-- pytest: **52 passed, 4 skipped**. Linux-only integration and opt-in VM PCM tests skipped.
-- PyInstaller standalone x64 GUI and console executables built with Python 3.12 and Qt Widgets.
-- Both packaged offscreen and native Windows desktop startup/shutdown passed. The native backend discovered **5 devices** and loaded the bundled DLL. Read-only smoke tests started no audio routes.
-- Console executable diagnostics passed. Reports and checksums are included in the portable bundle.
+Select CABLE Input in the source application's output settings, then route CABLE Output through A2Router. Native discovery tags the common PnP service; feedback protection treats all playback alternatives on the same cable as one logical endpoint. The recording side uses real input capture, not a fabricated monitor.
 
-Windows PCM playback, physical-input capture transport, fan-out/fan-in signal integrity and acoustic synchronization remain **UNTESTED**. No virtual endpoint driver is implemented, installed or managed. A real signed driver is required; the GUI disables virtual-device creation on Windows. No system defaults or drivers were changed.
+## Synchronization
 
-## Use and rebuild
+The Synchronization page retains per-route edits until Apply or Discard, including through periodic refresh and focus changes. Supported live changes call `AudioEngine::setDeviceDelay` through `ar_source_set_delay`; this does not restart the capture source. The engine validates live buffer limits and adjustment-in-flight states. On rejection, the current setting remains unchanged. A source restart fallback is used only when explicitly allowed; disabled-route settings are saved for the next start. The route-delay cache is updated after successful live requests so polling does not restart the session.
 
-Extract `dist/a2router-windows-x64.zip`, then launch `a2router.exe`. Python does not need to be installed. `a2router-cli.exe diagnostics` reports native capabilities and observed devices. Hiding the GUI keeps routing alive; exiting the Windows controller stops its audio engine. Console invocations cannot sustain routing after process exit.
+Readable telemetry reports buffer fill/target in milliseconds using native block alignment/sample rate, applied rate correction and underruns. Pending, buffering and adjusting states are distinct. Clock drift compensation remains automatic. A fixed delay does not synchronize independent hardware clocks or establish measured acoustic alignment.
 
-From a Visual Studio C++ developer environment:
+## UI refresh and lifecycle
 
-```powershell
-powershell -ExecutionPolicy Bypass -File tools/windows/build-portable.ps1
-```
+Discovery/polling runs in the serialized backend worker. Device, route and synchronization rows are updated in place by stable ID; unchanged snapshots do not clear widgets or reset scroll/selection. Polling does not disable buttons or flash a status message. User actions arriving during a poll are queued. Backend faults remain visible.
 
-The script builds/tests native targets, runs Python tests, creates GUI/console onefile executables, checks the packaged application and writes `dist/windows-x64` plus its ZIP. `-ToolchainRoot` optionally selects a locally extracted MSVC/SDK toolchain. The DLL uses a static MSVC runtime. The build script bundles runtime license notices; outputs are unsigned.
+Hiding the window keeps Windows routing alive. Exiting joins the controller and stops its native audio engines. Console invocations cannot sustain audio after their process exits. System defaults and unrelated routes are not explicitly changed by A2Router.
 
-For source development, install `.[test]`, build the CMake Windows targets, and set `A2ROUTER_WASAPI_DLL` if the DLL is outside the normal build path. Missing/failed native dependencies produce errors rather than simulated routing. Linux mock tests do not establish Windows playback correctness.
+## Build and checks
 
-## 2026-10-21 source additions (UNTESTED)
-
-A render-only WDK driver, elevated native device manager, Python ownership/reconciliation integration and build instructions are now present under `drivers/windows/`. Earlier statements that driver source is absent describe the previous verified baseline. No new driver binary was built, signed, installed or tested. See [driver setup](../drivers/windows/README.md). Stereo 48 kHz/16-bit is the only exposed creation layout.
-
-Synchronization now exposes a persisted additional delay of 0–10000 ms per route through the existing output FIFO and drift controller. Applying delay restarts the affected source session and all of its destinations. Native telemetry includes target/fill/capacity, applied delay, prebuffering, drift error, sample-rate adjustment and underruns. Default buffering/drift settings remain in the native engine. This is software clock adaptation and manual delay, not measured acoustic alignment. Rebuild the bridge DLL; older API-v2 DLLs without the additive delay export keep the controls disabled. This new control path is UNTESTED.
+Build native targets with CMake/MSVC, then use `tools/windows/build-portable.ps1`. The optional setup EXE is compiled with `tools/windows/build-setup.ps1` and Inno Setup 6.3+. GitHub Actions remain manual-only and never install an audio driver on the runner. Headless packaged checks use a labelled mock backend; the actual DLL ABI is separately loaded and checked. Earlier Windows build/discovery checks predate the VB-CABLE and UI revisions; actual installation/playback remain unverified for this revision.

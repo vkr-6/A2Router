@@ -3,10 +3,10 @@ name: A2Router build
 on:
   workflow_dispatch:
     inputs:
-      build_driver:
-        description: Build the unsigned Windows virtual audio driver (WDK)
+      build_setup:
+        description: Build the Windows setup EXE with the original VB-CABLE package
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
@@ -29,6 +29,27 @@ jobs:
       - name: Build, check and package
         shell: pwsh
         run: ./tools/windows/build-portable.ps1 -Workspace "$env:RUNNER_TEMP/a2router-build" -Headless
+      - name: Ensure setup compiler
+        if: inputs.build_setup
+        shell: pwsh
+        run: |
+          $installed = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 7\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe") | Where-Object { Test-Path $_ }
+          if (!(Get-Command ISCC.exe -ErrorAction SilentlyContinue) -and !$installed) {
+            choco install innosetup --yes --no-progress --limit-output
+            if ($LASTEXITCODE) { throw 'Inno Setup installation failed' }
+          }
+      - name: Build Windows setup
+        if: inputs.build_setup
+        shell: pwsh
+        run: ./tools/windows/build-setup.ps1
+      - name: Upload Windows setup
+        if: inputs.build_setup
+        uses: actions/upload-artifact@v4
+        with:
+          name: A2Router-Setup-x64
+          path: dist/setup/
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload portable application
         uses: actions/upload-artifact@v4
         with:
@@ -75,25 +96,3 @@ jobs:
       - run: ctest --test-dir build --output-on-failure
       - name: Isolated real PipeWire integration
         run: dbus-run-session -- python tests/run_private_pipewire.py
-
-  windows-driver:
-    name: Windows x64 unsigned driver (manual)
-    if: github.event_name == 'workflow_dispatch' && inputs.build_driver
-    runs-on: windows-2022
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: microsoft/setup-msbuild@v2
-        with:
-          msbuild-architecture: x64
-      - uses: NuGet/setup-nuget@v2
-      - name: Build with matching WDK and SDK NuGet packages
-        shell: pwsh
-        run: ./tools/windows/build-driver.ps1 -UseNuGet -NuGetPackageRoot "$env:RUNNER_TEMP/a2router-wdk"
-      - name: Upload unsigned driver package
-        uses: actions/upload-artifact@v4
-        with:
-          name: A2Router-driver-x64-UNSIGNED
-          path: build/windows-driver/package/
-          if-no-files-found: error
-          retention-days: 14

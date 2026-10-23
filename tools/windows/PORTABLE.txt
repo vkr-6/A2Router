@@ -1,30 +1,25 @@
 A2Router — Advanced Audio Router (Windows x64)
 
-Launch a2router.exe for the GUI, or run a2router-cli.exe diagnostics for status.
-The packaged application includes Python/Qt and the WASAPI bridge. Routing runs
-without elevation. Creating/removing virtual devices requests UAC approval.
+Launch a2router.exe or use a2router-cli.exe diagnostics. The portable application
+includes Python/Qt and the native WASAPI bridge. Use the setup EXE to install
+VB-CABLE automatically when absent. The vendor payload is also retained under
+vendor/vb-cable/. Installing a driver needs administrator approval and a restart.
+The driver is not installed on ordinary application startup.
 
-Virtual outputs require a separately built, accepted signed driver package.
-If supplied, place A2RouterAudio.inf, A2RouterAudio.sys and A2RouterAudio.cat in
-driver/ beside the EXEs, preserving their signed contents. Otherwise the
-virtual-device controls remain disabled. The included source driver supports
-stereo, 48 kHz, 16-bit PCM only. The driver and new delay-control path are
-UNTESTED. A CI build is not playback or driver-installation verification.
+VB-CABLE is donationware by VB-Audio Software (https://www.vb-cable.com/).
+Donations and licenses are welcome: https://vb-audio.com/Services/licensing.htm.
+The original vendor license and files remain unchanged. This is one shared
+cable, not an arbitrary number of named devices. Send apps to CABLE Input and
+route CABLE Output to speakers/headphones. A2Router uninstall offers to remove the shared driver with a restart.
+Pre-existing drivers default to keeping; silent removal needs /REMOVEVBCABLE=1. Check Windows defaults after installing any audio driver.
 
-Synchronization offers additional per-route software delay after rebuilding
-the current native bridge. Applying delay restarts all outputs of that source.
-Native drift compensation is automatic. Acoustic alignment is unmeasured.
+Synchronization keeps edits until Apply/Discard. Live delay changes use the
+native FIFO when supported; source restart requires the explicit option.
+Automatic drift compensation is not measured acoustic synchronization.
+Refresh updates rows in place and preserves selection and unapplied edits.
 
-Use Application > Exit controller to quit. Windows audio stops on exit;
-closing the window hides/minimizes it. Configuration lives in
-%APPDATA%\a2router. Microphone monitoring requires feedback confirmation.
-
-Checksums: SHA256SUMS.txt. Runtime versions: build-info.json.
-License notices: licenses/ and THIRD_PARTY_NOTICES.md.
-Any smoke reports cover read-only startup/discovery, not audio playback.
-No routes are started or drivers installed by the packaged smoke check.
-
-Credits: Windows engine from vkr-6/MultiRoute, originally
-FulminataXII/MultiRoute. Driver adapted from Microsoft SimpleAudioSample.
-A2Router additions developed with OpenAI Codex under the project owner's
-direction. See the source README and THIRD_PARTY_NOTICES.md for details.
+Configuration: %APPDATA%\a2router. Closing hides/minimizes the app. Exit controller
+stops Windows routing. No bit-perfect or hardware-playback claim is made.
+Credits: vkr-6/MultiRoute, originally FulminataXII/MultiRoute; VB-Audio Software;
+A2Router additions developed with OpenAI Codex under the owner's direction.
+See THIRD_PARTY_NOTICES.md, licenses/ and vendor/VB-CABLE-NOTICE.txt.
