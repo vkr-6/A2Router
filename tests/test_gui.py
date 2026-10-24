@@ -18,10 +18,11 @@ def app():
 
 def wait(app, window):
     deadline = time.monotonic() + 10
-    while window.busy and time.monotonic() < deadline:
+    while time.monotonic() < deadline:
         app.processEvents()
+        if not window.busy and not window._pending_actions:
+            return
         time.sleep(0.005)
-    app.processEvents()
     assert not window.busy
 
 
@@ -320,8 +321,8 @@ def test_virtual_tab_shows_existing_cable_and_configures_capture_16_channels(app
     window = MainWindow(Controller(backend))
     try:
         wait(app, window)
-        assert window.virtual_tree.topLevelItemCount() == 3
-        assert window.cable_endpoint.count() == 3
+        assert window.virtual_tree.topLevelItemCount() == 1
+        assert window.cable_endpoint.count() >= 3
         window.cable_endpoint.setCurrentIndex(window.cable_endpoint.findData("cable-out"))
         window.scan_formats_button.click()
         wait(app, window)
@@ -335,10 +336,9 @@ def test_virtual_tab_shows_existing_cable_and_configures_capture_16_channels(app
         window.destination.setCurrentIndex(window.destination.findData("cable-16"))
         window.channel_group.setChecked(True)
         assert window.channel_table.cellWidget(0, 0).count() == 16
-        window.endpoint_name.setText("Applications")
-        window.rename_button.click()
-        wait(app, window)
-        assert backend.get_device("cable-out").name == "Applications"
+        window.navigation.setCurrentRow(2)
+        assert not window.rename_button.isVisible()
+        assert backend.get_device("cable-out").name == "cable-out"
     finally:
         shutdown(app, window)
 
@@ -363,5 +363,98 @@ def test_main_audio_filter_preserves_cards_and_peak_history(app):
         assert window.dashboard.card_order == ["speakers"]
         assert window.dashboard.cards["speakers"] is card
         assert window.dashboard.counters["outputs"].text() == "2"
+    finally:
+        shutdown(app, window)
+
+
+def test_shared_cable_has_one_mixer_strip_and_controls_managed_streams(app, tmp_path):
+    from test_device_controls import StreamBridge
+
+    from a2router.backends.windows import WindowsBackend
+
+    bridge = StreamBridge()
+    backend = WindowsBackend(bridge)
+    backend.refresh()
+    route = backend.create_route("cable-out", "headphones")
+    window = MainWindow(Controller(backend), tmp_path / "session.json")
+    try:
+        wait(app, window)
+        window.navigation.setCurrentRow(1)
+        assert "cable-out" in window.dashboard.cards
+        assert not {"cable-in", "cable-16"} & set(window.dashboard.cards)
+        card = window.dashboard.cards["cable-out"]
+        assert card.graph.height() == 6
+        card.volume.setValue(25)
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and route.volume != 0.25:
+            app.processEvents()
+            time.sleep(0.005)
+        wait(app, window)
+        assert route.volume == 0.25
+        card.mute.click()
+        wait(app, window)
+        assert route.muted and bridge.sessions["cable-out"]["devices"][0]["volume"] == 0
+        assert bridge.volume == 0.8  # The vendor endpoint master control is deliberately untouched.
+        import json
+
+        saved = json.loads((tmp_path / "session.json").read_text())
+        assert saved["routes"][0]["volume"] == 0.25 and saved["routes"][0]["muted"]
+    finally:
+        shutdown(app, window)
+
+
+def test_clean_workspace_removes_showcase_and_profiles_outside_file(app):
+    from PySide6.QtWidgets import QToolBar
+
+    window = MainWindow(Controller(MockBackend()))
+    try:
+        window.show()
+        wait(app, window)
+        assert [b.text() for b in window.navigation.buttons] == [
+            "Audio Routing",
+            "Mixer",
+            "Devices",
+            "Calibration",
+            "Diagnostics",
+            "Settings",
+        ]
+        assert [window.studio.routing_tabs.tabText(i) for i in range(window.studio.routing_tabs.count())] == [
+            "Routes",
+            "Channel Matrix",
+        ]
+        assert not window.studio.routing_tabs.isAncestorOf(window.studio.input_table)
+        assert not window.studio.routing_tabs.isAncestorOf(window.studio.output_table)
+        for toolbar in window.findChildren(QToolBar):
+            assert not {"New", "Save", "Save As…", "Open…"} & {a.text() for a in toolbar.actions()}
+        file_menu = window.menuBar().actions()[0].menu()
+        assert {"New", "Open…", "Save", "Save As…"} <= {a.text() for a in file_menu.actions()}
+        assert not window.studio.profiles.isVisible()
+    finally:
+        shutdown(app, window)
+
+
+def test_calibration_gui_calls_capture_and_applies_only_on_review(app, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    from test_calibration import CaptureBackend
+
+    backend = CaptureBackend()
+    first = backend.create_route("mic", "speakers", monitoring_confirmed=True)
+    backend.create_route("mic", "headphones", monitoring_confirmed=True)
+    window = MainWindow(Controller(backend))
+    try:
+        wait(app, window)
+        window.navigation.setCurrentRow(3)
+        panel = window.studio.calibration_panel
+        for i in range(panel.outputs.count()):
+            panel.outputs.item(i).setCheckState(__import__("PySide6.QtCore", fromlist=["Qt"]).Qt.Checked)
+        panel.reference.setCurrentIndex(panel.reference.findData("speakers"))
+        monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
+        panel.start.click()
+        wait(app, window)
+        assert len(backend.capture_calls) == 6 and first.delay_ms == 0
+        assert panel.table.rowCount() == 2 and panel.apply.isEnabled()
+        panel.apply.click()
+        wait(app, window)
+        assert first.delay_ms == 63
     finally:
         shutdown(app, window)

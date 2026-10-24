@@ -1,10 +1,10 @@
-"""Main audio console. Graphs contain observed endpoint peaks only."""
+"""Compact device mixer with observed peak meters and real control callbacks."""
 
 import math
 from collections import deque
 
-from PySide6.QtCore import QPointF, QSignalBlocker, Qt, QTimer
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QSignalBlocker, Qt, QTimer
+from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -20,14 +20,14 @@ from PySide6.QtWidgets import (
 )
 
 
-class PeakGraph(QWidget):
+class PeakMeter(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.samples = deque(maxlen=160)
         self.available = False
-        self.setMinimumHeight(45)
-        self.setAccessibleName("Observed endpoint peak history")
-        self.setToolTip("Observed endpoint peaks over 30 seconds, from −60 to 0 dBFS.")
+        self.setFixedHeight(6)
+        self.setAccessibleName("Observed endpoint level")
+        self.setToolTip("Current observed peak level, from −60 to 0 dBFS. No history graph.")
 
     def observe(self, timestamp, peak):
         available = timestamp is not None and peak is not None and math.isfinite(peak)
@@ -43,40 +43,13 @@ class PeakGraph(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        rect = self.rect().adjusted(1, 5, -1, -5)
-        painter.setPen(QPen(QColor("#263548"), 1))
-        for step in (0, 0.5, 1):
-            y = rect.bottom() - rect.height() * step
-            painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
-        if not self.available or not self.samples:
-            painter.setPen(QColor("#8091a9"))
-            painter.drawText(rect, Qt.AlignCenter, "No level data")
-            return
-        newest = self.samples[-1][0]
-        path = QPainterPath()
-        started = False
-        previous = None
-        for timestamp, value in self.samples:
-            if timestamp < newest - 30:
-                continue
-            x = rect.right() - (newest - timestamp) / 30 * rect.width()
-            scaled = max(0.0, min(1.0, (20 * math.log10(max(value, 0.001)) + 60) / 60))
-            y = rect.bottom() - scaled * rect.height()
-            point = QPointF(x, y)
-            # Do not imply continuous measurement across gaps.
-            if not started or (previous is not None and timestamp - previous > 2):
-                path.moveTo(point)
-                started = True
-            else:
-                path.lineTo(point)
-            previous = timestamp
-        painter.setPen(QPen(QColor("#48ddbf"), 2))
-        painter.drawPath(path)
-        value = self.samples[-1][1]
-        painter.setBrush(QColor("#48ddbf"))
-        scaled = max(0.0, min(1.0, (20 * math.log10(max(value, 0.001)) + 60) / 60))
-        painter.drawEllipse(QPointF(rect.right(), rect.bottom() - scaled * rect.height()), 2.5, 2.5)
+        rect = self.rect().adjusted(0, 0, -1, -1)
+        painter.fillRect(rect, self.palette().mid())
+        if self.available and self.samples:
+            peak = self.samples[-1][1]
+            fraction = max(0.0, min(1.0, (20 * math.log10(max(peak, 0.001)) + 60) / 60))
+            rect.setWidth(round(rect.width() * fraction))
+            painter.fillRect(rect, self.palette().highlight())
 
 
 class DeviceCard(QFrame):
@@ -102,7 +75,7 @@ class DeviceCard(QFrame):
         self.format_label = QLabel()
         self.format_label.setObjectName("MutedText")
         layout.addWidget(self.format_label)
-        self.graph = PeakGraph()
+        self.graph = PeakMeter()
         layout.addWidget(self.graph)
         row = QHBoxLayout()
         self.peak = QLabel("— dBFS")
@@ -134,7 +107,11 @@ class DeviceCard(QFrame):
 
     def populate(self, device):
         self.name.setText(device["name"])
-        self.direction.setText("OUTPUT" if device["kind"] == "output" else "INPUT")
+        cable = device.get("properties", {}).get("virtual_driver") == "VB-CABLE"
+        self.direction.setText("CABLE" if cable else "OUTPUT" if device["kind"] == "output" else "INPUT")
+        self.graph.setToolTip(
+            "Incoming cable peak before routed-stream gain" if cable else "Observed system endpoint peak"
+        )
         rate = device.get("sample_rate")
         text = (
             f"{device.get('channels') or '?'} ch  ·  {rate / 1000:g} kHz"
@@ -144,6 +121,12 @@ class DeviceCard(QFrame):
         self.format_label.setText(text + "  ·  " + device.get("state", "unknown").title())
         controls = device.get("properties", {}).get("controls", {})
         volume_available = controls.get("volume_available", False)
+        self.volume.setToolTip(
+            controls.get("reason", "")
+            if not volume_available
+            else controls.get("scope", "System endpoint volume")
+        )
+        self.mute.setToolTip(self.volume.toolTip())
         self.volume.setEnabled(volume_available)
         self.mute.setEnabled(volume_available)
         if volume_available:
@@ -157,7 +140,7 @@ class DeviceCard(QFrame):
             self.mute.setText("Unmute" if controls.get("muted") else "Mute")
         else:
             self.percent.setText("—")
-            self.volume.setToolTip("Master volume is unavailable for this endpoint")
+            self.volume.setToolTip(controls.get("reason", "Master volume is unavailable for this endpoint"))
         peak = controls.get("peak") if controls.get("peak_available") else None
         self.graph.observe(controls.get("observed_at"), peak)
         self.peak.setText(
@@ -182,7 +165,7 @@ class Dashboard(QWidget):
             ("routes", "Active routes"),
             ("errors", "Route errors"),
         ):
-            frame = QFrame()
+            frame = QFrame(self)
             frame.setObjectName("SummaryCard")
             box = QVBoxLayout(frame)
             number = QLabel("0")
@@ -193,7 +176,9 @@ class Dashboard(QWidget):
             box.addWidget(caption)
             summary.addWidget(frame)
             self.counters[key] = number
-        layout.addLayout(summary)
+        # Counters remain internal observations; the mixer displays compact strips.
+        for index in range(summary.count()):
+            summary.itemAt(index).widget().hide()
         tools = QHBoxLayout()
         heading = QLabel("Device mixer")
         heading.setObjectName("SectionTitle")
@@ -229,11 +214,31 @@ class Dashboard(QWidget):
 
     def populate(self, devices, routes):
         self.latest_devices, self.latest_routes = devices, routes
-        all_devices = [
-            d
-            for d in devices
-            if not d.get("monitor_of") or d.get("properties", {}).get("capture_endpoint_id")
-        ]
+        all_devices = []
+        cable_groups = set()
+        for device in devices:
+            props = device.get("properties", {})
+            if device.get("monitor_of") and not props.get("capture_endpoint_id"):
+                continue
+            if props.get("virtual_driver") == "VB-CABLE":
+                if not props.get("capture_endpoint_id"):
+                    continue
+                group = props.get("feedback_group", "vbcable:base")
+                if group in cable_groups:
+                    continue
+                cable_groups.add(group)
+            all_devices.append(device)
+        routed_outputs = {r["destination_id"] for r in routes if r.get("enabled")}
+        all_devices.sort(
+            key=lambda d: (
+                0
+                if d.get("properties", {}).get("virtual_driver") == "VB-CABLE"
+                else 1
+                if d["id"] in routed_outputs
+                else 2,
+                d["name"].casefold(),
+            )
+        )
         query = self.search.text().strip().casefold()
         kind = self.filter_kind.currentText()
         visible = [
@@ -265,7 +270,7 @@ class Dashboard(QWidget):
             card = self.cards[ident]
             card.show()
             if relayout:
-                self.grid.addWidget(card, index // 2, index % 2)
+                self.grid.addWidget(card, index, 0, 1, 2)
             card.populate(device)
         self.empty.setText(
             "No devices match your filter."

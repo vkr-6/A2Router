@@ -22,6 +22,7 @@
 #include <thread>
 #include "WindowsEndpointControl.h"
 #include "EndpointRename.h"
+#include "WindowsCalibration.h"
 
 using Microsoft::WRL::ComPtr;
 namespace {
@@ -178,7 +179,7 @@ void writeDevice(std::ostream& out, IMMDevice* device, const std::wstring& name,
     }
     out << '}';
 }
-bool startSession(const std::wstring& source, bool input, const wchar_t* ids, const wchar_t* delayList = nullptr, const wchar_t* matrixList = nullptr) {
+bool startSession(const std::wstring& source, bool input, const wchar_t* ids, const wchar_t* delayList = nullptr, const wchar_t* matrixList = nullptr, const wchar_t* volumeList = nullptr) {
     auto& session = sessions[source];
     if (!session.engine) session.engine = std::make_unique<mux::AudioEngine>();
     session.engine->stop();
@@ -189,6 +190,8 @@ bool startSession(const std::wstring& source, bool input, const wchar_t* ids, co
     std::wistringstream lines(ids ? ids : L"");
     std::wistringstream delayLines(delayList ? delayList : L"");
     config.normalize_output_delays = delayList == nullptr;
+    std::wistringstream volumeLines(volumeList ? volumeList : L"");
+    volumeLines.imbue(std::locale::classic());
     std::wistringstream matrixLines(matrixList ? matrixList : L"");
     std::wstring id;
     while (std::getline(lines, id)) if (!id.empty()) {
@@ -223,8 +226,21 @@ bool startSession(const std::wstring& source, bool input, const wchar_t* ids, co
             std::wstring extra;
             if (entries >> extra) { error = "Extra matrix values"; return false; }
         }
+        if (volumeList) {
+            std::wstring row;
+            double volume = 0;
+            if (!std::getline(volumeLines, row)) { error = "One gain per output required"; return false; }
+            std::wistringstream entry(row); entry.imbue(std::locale::classic());
+            std::wstring extra;
+            if (!(entry >> volume) || (entry >> extra) || !std::isfinite(volume) || volume < 0 || volume > 1) {
+                error = "Invalid output gain"; return false;
+            }
+            request.initial_volume = static_cast<float>(volume);
+        }
         config.outputs.push_back(std::move(request));
     }
+    std::wstring extraVolume;
+    if (volumeList && std::getline(volumeLines, extraVolume)) { error = "Extra gain rows"; return false; }
     std::wstring extraMatrix;
     if (matrixList && std::getline(matrixLines, extraMatrix)) { error = "Extra matrix rows"; return false; }
     std::wstring extraDelay;
@@ -256,7 +272,8 @@ void writeStats(std::ostream& out, const std::wstring& source, const Session& se
         first = false;
         out << "{\"id\":" << quote(utf8(device.endpoint_id)) << ",\"faulted\":" << (device.faulted ? "true" : "false")
             << ",\"running\":" << (device.running ? "true" : "false") << ",\"fill_bytes\":" << device.fill_bytes
-            << ",\"target_bytes\":" << device.target_bytes << ",\"sample_rate\":" << device.sample_rate_hz
+            << ",\"target_bytes\":" << device.target_bytes << ",\"volume\":" << device.volume
+            << ",\"sample_rate\":" << device.sample_rate_hz
             << ",\"clipped_samples\":" << device.clipped_samples
             << ",\"overflows\":" << device.overflow_count << ",\"underflows\":" << device.partial_underflow_count + device.catastrophic_underflow_count
             << ",\"delay_ms\":" << device.configured_delay_ms
@@ -522,4 +539,54 @@ API int ar_rename_device(const wchar_t* id, const wchar_t* name) {
         error = message.str();
     }
     return 0;
+}
+
+// Additive, versioned controls retain the existing API-v2 ABI.
+API int ar_routing_controls_version() { return 1; }
+API int ar_source_start_config(const wchar_t* source, int input, const wchar_t* ids,
+                              const wchar_t* delays, const wchar_t* matrices, const wchar_t* volumes) {
+    std::lock_guard<std::mutex> lock(apiMutex);
+    try {
+        if (!source || !*source || !ids || !delays || !matrices || !volumes) {
+            error = "Source and output configuration required"; return 0;
+        }
+        return startSession(source, input != 0, ids, delays, matrices, volumes) ? 1 : 0;
+    } catch (const std::exception& exc) { error = exc.what(); return 0; }
+}
+API int ar_source_set_volume(const wchar_t* source, int input, const wchar_t* destination, float gain) {
+    std::lock_guard<std::mutex> lock(apiMutex);
+    if (!source || !destination || !std::isfinite(gain) || gain < 0 || gain > 1) { error = "Invalid stream gain"; return 0; }
+    ComScope scope;
+    if (!scope.usable()) { error = "COM initialization failed for stream gain"; return 0; }
+    try {
+        const auto found = sessions.find(source);
+        if (found == sessions.end() || found->second.input != (input != 0)) { error = "Source session is not running"; return 0; }
+        const auto stats = found->second.engine->stats();
+        for (size_t i = 0; i < stats.devices.size(); ++i) {
+            if (stats.devices[i].endpoint_id == destination) {
+                if (found->second.engine->setDeviceVolume(static_cast<int>(i), gain)) { error.clear(); return 1; }
+                error = "WASAPI stream volume is unsupported or rejected"; return 0;
+            }
+        }
+        error = "Output is not in this source session"; return 0;
+    } catch (const std::exception& exc) { error = exc.what(); return 0; }
+}
+API int ar_calibration_version() { return 1; }
+API void ar_calibration_cancel() { a2r::calibrationCancelled.store(true, std::memory_order_relaxed); }
+API void ar_calibration_reset() { a2r::calibrationCancelled.store(false, std::memory_order_relaxed); }
+API const char* ar_calibration_record(const wchar_t* mic, const wchar_t* output, float level, int channel) {
+    std::lock_guard<std::mutex> lock(apiMutex);
+    try {
+        ComScope scope;
+        if (!scope.usable() || channel < 0) { error = "COM initialization or microphone channel invalid"; return nullptr; }
+        const auto recording = a2r::recordCalibration(mic, output, level, static_cast<unsigned>(channel));
+        std::ostringstream out; out.imbue(std::locale::classic()); out.precision(9);
+        out << "{\"sample_rate\":" << recording.rate << ",\"capture_start_100ns\":" << recording.firstQpc
+            << ",\"signal_time_100ns\":" << recording.signalQpc << ",\"samples\":[";
+        for (size_t i = 0; i < recording.samples.size(); ++i) {
+            if (i) out << ',';
+            out << recording.samples[i];
+        }
+        out << "]}"; result = out.str(); error.clear(); return result.c_str();
+    } catch (const std::exception& exc) { error = exc.what(); return nullptr; }
 }

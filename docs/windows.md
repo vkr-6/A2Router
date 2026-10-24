@@ -33,3 +33,7 @@ Linux Qt tests, native matrix sample tests and Windows control/PowerShell simula
 Native `IAudioEndpointVolume` provides master volume/mute and `IAudioMeterInformation` provides observed peaks for physical inputs, outputs and actual cable capture/playback endpoints. Generated loopback aliases are excluded from duplicate mixer controls. Fast meter polling is serialized off the GUI thread and only runs while Audio is visible. Charts retain stable device identity, avoid interpolating across gaps and show unavailable data explicitly. Volume control does not restart source sessions.
 
 The top navigation and manual synchronization workflow are documented in [the user guide](user-guide.md). Rename verification now reacquires endpoint/property-store instances; write/commit access-denied HRESULTs reach the explicit elevation flow. A rejected unchanged write does not attempt rollback. This change still requires a target-machine Windows DLL build and rename check.
+
+## Current UI and packages
+
+Endpoint renaming is no longer exposed; Windows/vendor names are retained. Device/virtual configuration is combined. VB-CABLE routed gain uses the new native stream-control extension and actual WASAPI readback. Calibration uses finite native capture/playback and offline analysis; target Windows build/hardware checks remain required. The manual workflow now produces portable and optional single-file setup outputs; driver install/remove choices are unchecked. See [current guide](user-guide.md).

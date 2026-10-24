@@ -29,6 +29,12 @@ def smoke_test(report_path, mock=False):
         if window.busy or state["finished"]:
             return
         state["finished"] = True
+        import numpy as np
+
+        from a2router.calibration import chirp
+
+        reference = chirp(16000)
+        fft_ok = bool(np.max(np.abs(np.fft.irfft(np.fft.rfft(reference), len(reference)) - reference)) < 1e-9)
         data = {
             "window_title": window.windowTitle(),
             "qt_platform": app.platformName(),
@@ -38,10 +44,11 @@ def smoke_test(report_path, mock=False):
             "simulated": mock,
             "checks": {
                 "qt_window_created": True,
+                "offline_fft_runtime": fft_ok,
                 "device_snapshot_populated": len(window.view_devices) == len(backend.list_devices()),
                 "no_routes_started": not backend.list_routes(),
             },
-            "scope": "Read-only discovery and packaged GUI startup/shutdown; no playback or driver verification",
+            "scope": "Read-only discovery, packaged GUI startup/shutdown and offline synthetic FFT verification; no playback or driver verification",
         }
         state["ok"] = not bool(backend.last_error) and all(data["checks"].values())
         path = Path(report_path)

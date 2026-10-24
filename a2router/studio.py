@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QFont, QPalette
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -44,7 +44,7 @@ class Navigation(QWidget):
         self.row = -1
         self.group = QButtonGroup(self)
         self.group.idClicked.connect(self.setCurrentRow)
-        self.setMaximumHeight(58)
+        self.setFixedHeight(52)
         self.layout = QHBoxLayout(self)
         self.layout.setContentsMargins(4, 0, 4, 0)
         self.layout.setSpacing(2)
@@ -118,23 +118,7 @@ class Studio:
 
         self.matrix = MatrixEditor(w)
         self.routing_tabs.addTab(self.matrix, "Channel Matrix")
-        processing = QWidget()
-        box = QVBoxLayout(processing)
-        text = QLabel(
-            "Channel gains, remapping, duplication and summing run in the native matrix path. "
-            "Unmapped destinations are silent. Mixed samples are clamped to ±1. "
-            "Use Mixer for endpoint volume and mute; these controls affect other applications too. "
-            "EQ, compressor, pan and exclusive-mode controls are not implemented."
-        )
-        text.setWordWrap(True)
-        box.addWidget(text)
-        jump = QPushButton("Edit channel gains and mapping")
-        jump.clicked.connect(lambda: self.routing_tabs.setCurrentIndex(1))
-        box.addWidget(jump)
-        box.addStretch()
-        self.routing_tabs.addTab(processing, "Advanced Processing")
-        # The previous synchronization page becomes an embedded, collapsible section.
-        self.delay_group = QGroupBox("Synchronization & Delay Compensation")
+        self.delay_group = QGroupBox("Synchronization & delay")
         self.delay_group.setCheckable(True)
         self.delay_group.setChecked(False)
         delay_box = QVBoxLayout(self.delay_group)
@@ -143,54 +127,52 @@ class Studio:
         sync.hide()
         self.delay_group.toggled.connect(sync.setVisible)
         routing_layout.addWidget(self.delay_group)
-        self.monitor = QPlainTextEdit()
-        self.monitor.setReadOnly(True)
-        self.routing_tabs.addTab(self.monitor, "Route Monitor")
-        # Two resizable, model/view tables select the real endpoint combos.
+        w.route_tree.setMaximumHeight(16777215)
         self.input_table, self.output_table = DeviceTable("input"), DeviceTable("output")
-        self.device_splitter = QSplitter(Qt.Vertical)
-        for title, table, combo in (
-            ("Input sources", self.input_table, w.source),
-            ("Output destinations", self.output_table, w.destination),
-        ):
-            group = QGroupBox(title)
-            layout = QVBoxLayout(group)
-            layout.setContentsMargins(6, 12, 6, 6)
-            layout.addWidget(table)
-            self.device_splitter.addWidget(group)
-            table.selected.connect(lambda ident, target=combo: target.setCurrentIndex(target.findData(ident)))
         self.output_table.model.edit_requested.connect(self.edit_endpoint)
-        # Full-width tables keep channel/format/control columns visible on 1366px displays.
-        self.routing_tabs.removeTab(0)
+        device_tabs = QTabWidget()
+        device_tabs.addTab(self.output_table, "Outputs")
+        device_tabs.addTab(self.input_table, "Inputs")
+        config_scroll = QScrollArea()
+        config_scroll.setWidgetResizable(True)
+        config_scroll.setFrameShape(QFrame.NoFrame)
+        config_scroll.setWidget(virtual)
+        virtual.show()
+        device_tabs.addTab(config_scroll, "Configure")
+        self.devices_page = QWidget()
+        device_layout = QVBoxLayout(self.devices_page)
+        device_layout.setContentsMargins(0, 0, 0, 0)
+        device_layout.addWidget(device_tabs, 1)
+        device_layout.addWidget(w.device_details)
+        w.device_details.hide()
+        w.virtual_tree.setMaximumHeight(110)
+        device_tabs.currentChanged.connect(
+            lambda index: w.device_details.setVisible(index != 2 and bool(w.device_details.toPlainText()))
+        )
+        self.legacy_devices = devices
+        devices.setParent(self.devices_page)
+        devices.hide()
+        self.device_tabs = device_tabs
+        for table in (self.input_table, self.output_table):
+            table.selected.connect(self.select_device)
+        # Configuration and virtual-driver management share one Devices workspace.
         self.splitter = QSplitter(Qt.Vertical)
-        self.splitter.addWidget(self.device_splitter)
         self.route_scroll = QScrollArea()
         self.route_scroll.setWidgetResizable(True)
         self.route_scroll.setFrameShape(QFrame.NoFrame)
+        self.routing_tabs.removeTab(self.routing_tabs.indexOf(routing))
         self.route_scroll.setWidget(routing)
-        self.route_scroll.setMinimumHeight(170)
         routing.show()
         self.splitter.addWidget(self.route_scroll)
-        self.splitter.setChildrenCollapsible(False)
-        self.splitter.setStretchFactor(0, 1)
-        self.splitter.setStretchFactor(1, 1)
-        self.splitter.setSizes([300, 300])
-        self.device_splitter.setSizes([140, 140])
-        self.routing_tabs.insertTab(0, self.splitter, "Routing Configuration")
+        self.routing_tabs.insertTab(0, self.splitter, "Routes")
         self.routing_tabs.setCurrentIndex(0)
-        calibration = QWidget()
-        box = QVBoxLayout(calibration)
-        label = QLabel(
-            "Microphone-assisted calibration is planned for the next upgrade. No acoustic measurements "
-            "have been made. You can set additional output delays manually in Routing Configuration. "
-            "Clock correction and software buffers do not measure acoustic arrival time."
-        )
-        label.setWordWrap(True)
-        box.addWidget(label)
-        manual = QPushButton("Open manual delay compensation")
-        manual.clicked.connect(self.open_delay)
-        box.addWidget(manual)
-        box.addStretch()
+        from a2router.calibration_ui import CalibrationPanel
+
+        self.calibration_panel = CalibrationPanel(w)
+        calibration = QScrollArea()
+        calibration.setWidgetResizable(True)
+        calibration.setFrameShape(QFrame.NoFrame)
+        calibration.setWidget(self.calibration_panel)
         diagnostics = QWidget()
         box = QVBoxLayout(diagnostics)
         box.setContentsMargins(0, 0, 0, 0)
@@ -211,8 +193,9 @@ class Studio:
         preferences = QGroupBox("Interface")
         form = QFormLayout(preferences)
         self.theme = QComboBox()
-        self.theme.addItems(["System", "Light", "Dark"])
-        self.theme.setCurrentText(self.settings.value("theme", "System"))
+        self.theme.addItems(["System", "White", "Dark", "Lime", "Blue", "Violet"])
+        saved_theme = self.settings.value("theme", "System")
+        self.theme.setCurrentText("White" if saved_theme == "Light" else saved_theme)
         self.theme.currentTextChanged.connect(self.apply_theme)
         form.addRow("Theme", self.theme)
         self.density = QComboBox()
@@ -226,7 +209,7 @@ class Studio:
             if (
                 item.widget()
                 and isinstance(item.widget(), QGroupBox)
-                and item.widget().title() == "Diagnostics"
+                and item.widget().title() in ("Diagnostics", "Routing profiles")
             ):
                 item.widget().hide()
         w.navigation.clear()
@@ -235,12 +218,11 @@ class Studio:
                 "Audio Routing",
                 "Mixer",
                 "Devices",
-                "Virtual Devices",
                 "Calibration",
                 "Diagnostics",
                 "Settings",
             ),
-            (self.routing_tabs, mixer, devices, virtual, calibration, diagnostics, settings),
+            (self.routing_tabs, mixer, self.devices_page, calibration, diagnostics, settings),
         ):
             w.tabs.addWidget(page)
             w.navigation.addItem(title)
@@ -257,10 +239,7 @@ class Studio:
         geometry = self.settings.value("geometry")
         if geometry:
             w.restoreGeometry(geometry)
-        for key, splitter in (
-            ("routingSplitVerticalV1", self.splitter),
-            ("deviceSplit", self.device_splitter),
-        ):
+        for key, splitter in (("routingSplitVerticalV1", self.splitter),):
             state = self.settings.value(key)
             if state:
                 splitter.restoreState(state)
@@ -275,7 +254,8 @@ class Studio:
         bar = QToolBar("Routing controls", w)
         bar.setMovable(False)
         bar.setIconSize(QSize(16, 16))
-        self.profiles = QComboBox()
+        self.profiles = QComboBox()  # Internal recent-file state; never shown outside File.
+        self.profiles.hide()
         self.profiles.setMinimumContentsLength(16)
         self.profiles.setToolTip("Recent profiles; switching replaces routes after confirmation")
         self.profiles.addItem("Unsaved profile", "")
@@ -283,7 +263,7 @@ class Studio:
             if isinstance(path, str) and path:
                 self.profiles.addItem(Path(path).stem, path)
         self.profiles.activated.connect(self.choose_profile)
-        bar.addWidget(self.profiles)
+
         self.actions = {}
         for key, title, shortcut, callback in (
             ("new", "New", "Ctrl+N", self.new_profile),
@@ -310,7 +290,7 @@ class Studio:
                 )
             self.actions[key] = action
             w.addAction(action)
-            if key != "open":
+            if key in ("refresh", "start", "stop", "emergency"):
                 bar.addAction(action)
         w.addToolBar(bar)
         # Central navigation must appear above the global toolbar.
@@ -330,6 +310,9 @@ class Studio:
         }
         for key in ("new", "open", "save", "save_as"):
             menus["File"].addAction(self.actions[key])
+        recent = menus["File"].addMenu("Recent profiles")
+        self.recent_menu = recent
+        self.rebuild_recent_menu()
         menus["File"].addSeparator()
         menus["File"].addAction("Exit", w.exit_application)
         menus["Edit"].addAction("Copy selected device rows", self.copy_rows)
@@ -340,7 +323,7 @@ class Studio:
             )
         themes = menus["View"].addMenu("Theme")
         group = QActionGroup(w)
-        for name in ("System", "Light", "Dark"):
+        for name in ("System", "White", "Dark", "Lime", "Blue", "Violet"):
             action = themes.addAction(name)
             action.setCheckable(True)
             action.setChecked(name == self.theme.currentText())
@@ -421,6 +404,7 @@ class Studio:
     def emergency(self):
         w = self.window
         # Discard queued mutations that could restart transport after the stop.
+        w.controller.request_emergency_stop()
         w._pending_actions.clear()
         w.submit(w.controller.pause_routes, persist=False)
 
@@ -572,15 +556,7 @@ class Studio:
         for table in (self.input_table, self.output_table):
             table.model.update_devices(snapshot["devices"])
         diagnostics = snapshot["diagnostics"]
-        self.monitor.setPlainText(
-            json.dumps(
-                {"routes": snapshot["routes"], "telemetry": diagnostics.get("telemetry", {})}, indent=2
-            )
-        )
-        sessions = diagnostics.get("telemetry", {}).get("sessions", [])
-        rates = sorted({s["sample_rate"] for s in sessions if s.get("sample_rate")})
-        rate = "/".join(map(str, rates)) + " Hz" if rates else "Rate N/A"
-        underflows = [d["underflows"] for s in sessions for d in s.get("devices", []) if "underflows" in d]
+        self.calibration_panel.populate(snapshot.get("calibration"), snapshot["devices"])
         count_in = len({r["source_id"] for r in snapshot["routes"] if r["status"] == "connected"})
         count_out = len({r["destination_id"] for r in snapshot["routes"] if r["status"] == "connected"})
         profile = self.profile_path.stem if self.profile_path else "Unsaved profile"
@@ -592,7 +568,7 @@ class Studio:
         if diagnostics.get("error"):
             state = "Error"
         self.status.setText(
-            f"{state} | {self.window.backend.name} | {rate} | In {count_in} / Out {count_out} | CPU N/A | Underruns {sum(underflows) if underflows else 'N/A'} | {profile}{' *' if dirty else ''}"
+            f"{state} · {self.window.backend.name} · {count_in} sources / {count_out} outputs"
         )
         self.window.setWindowTitle(f"A2Router — {profile}{' *' if dirty else ''}")
         if self.profile_path:
@@ -600,81 +576,46 @@ class Studio:
             index = self.profiles.findData(path)
             if index < 0:
                 self.profiles.addItem(profile, path)
+                self.rebuild_recent_menu()
                 index = self.profiles.count() - 1
             self.profiles.setCurrentIndex(index)
         else:
             self.profiles.setCurrentIndex(0)
+
+    def select_device(self, ident):
+        w = self.window
+        for index in range(w.device_tree.topLevelItemCount()):
+            item = w.device_tree.topLevelItem(index)
+            if item.data(0, Qt.UserRole) == ident:
+                w.device_tree.setCurrentItem(item)
+                w.inspect_device()
+                w.device_details.setVisible(self.device_tabs.currentIndex() != 2)
+                break
+        if w._vbcable_page:
+            index = w.cable_endpoint.findData(ident)
+            if index >= 0:
+                w.cable_endpoint.setCurrentIndex(index)
+
+    def rebuild_recent_menu(self):
+        self.recent_menu.clear()
+        for index in range(1, self.profiles.count()):
+            path = self.profiles.itemData(index)
+            self.recent_menu.addAction(str(path), lambda checked=False, p=path: self.open_recent(p))
+        self.recent_menu.setEnabled(self.profiles.count() > 1)
+
+    def open_recent(self, path):
+        if self.confirm_replace():
+            self.open_path(path)
 
     def system_theme_changed(self, *_):
         if self.theme.currentText() == "System":
             self.apply_theme()
 
     def apply_theme(self, *_):
-        app = QApplication.instance()
-        theme = self.theme.currentText()
-        palette = QPalette(self.system_palette)
-        dark = theme == "Dark" or (
-            theme == "System" and app.styleHints().colorScheme() == Qt.ColorScheme.Dark
-        )
-        if dark:
-            from PySide6.QtGui import QColor
+        from a2router.themes import apply_theme
 
-            for role, color in (
-                (QPalette.Window, "#25272a"),
-                (QPalette.WindowText, "#e4e4e4"),
-                (QPalette.Base, "#1d1f22"),
-                (QPalette.AlternateBase, "#292c30"),
-                (QPalette.Text, "#e4e4e4"),
-                (QPalette.Button, "#303338"),
-                (QPalette.ButtonText, "#eeeeee"),
-                (QPalette.Highlight, "#315c85"),
-                (QPalette.HighlightedText, "#ffffff"),
-            ):
-                palette.setColor(role, QColor(color))
-        elif theme == "Light":
-            palette = app.style().standardPalette()
-        if app.style().objectName().lower() != "fusion":
-            app.setStyle("Fusion")
-        if dark:
-            from PySide6.QtGui import QColor
-
-            for role in (QPalette.Text, QPalette.WindowText, QPalette.ButtonText):
-                palette.setColor(QPalette.Disabled, role, QColor("#92969c"))
-            palette.setColor(QPalette.PlaceholderText, QColor("#a5a9af"))
-        app.setPalette(palette)
-        self.window.setPalette(palette)
-        self.window.setFont(QFont("Segoe UI" if __import__("sys").platform == "win32" else "DejaVu Sans", 9))
-        spacing = 2 if self.density.currentText() == "Extra compact" else 4
-        window_bg = palette.color(QPalette.Window).name()
-        text = palette.color(QPalette.WindowText).name()
-        base = palette.color(QPalette.Base).name()
-        button = palette.color(QPalette.Button).name()
-        alternate = palette.color(QPalette.AlternateBase).name()
-        highlight = palette.color(QPalette.Highlight).name()
-        highlighted_text = palette.color(QPalette.HighlightedText).name()
-        disabled = palette.color(QPalette.Disabled, QPalette.Text).name()
-        self.window.setStyleSheet(f"""
-            QWidget {{ background-color: {window_bg}; color: {text}; }}
-            QAbstractItemView, QPlainTextEdit {{ background-color: {base}; alternate-background-color: {alternate};
-                selection-background-color: {highlight}; selection-color: {highlighted_text}; }}
-            QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{ background-color: {base}; color: {text}; }}
-            QPushButton, QToolButton, QHeaderView::section {{ background-color: {button}; color: {text}; }}
-            QMenu::item:selected, QMenuBar::item:selected {{ background-color: {highlight}; color: {highlighted_text}; }}
-            QWidget:disabled {{ color: {disabled}; }}
-            QToolButton {{ padding: 2px 9px; }}
-            QToolButton:checked {{ background: {highlight}; color: {highlighted_text}; }}
-            QPushButton {{ padding: 3px 8px; min-height: 18px; }}
-            QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{ min-height: 21px; }}
-            QTreeView::item {{ padding: {spacing}px 2px; }}
-            QHeaderView::section {{ padding: 4px; }}
-            QGroupBox {{ margin-top: 9px; padding-top: 9px; }}
-            QGroupBox::title {{ subcontrol-origin: margin; left: 6px; }}
-            QLabel#PageTitle {{ font-size: 12px; }}
-            QLabel#SummaryNumber {{ font-size: 14px; font-weight: bold; }}
-            QLabel#SectionTitle, QLabel#CardTitle {{ font-weight: bold; }}
-            QFrame#DeviceCard, QFrame#SummaryCard {{ border: 1px solid palette(mid); }}
-        """)
-        self.settings.setValue("theme", theme)
+        apply_theme(self.window, self.theme.currentText(), self.density.currentText())
+        self.settings.setValue("theme", self.theme.currentText())
         self.settings.setValue("density", self.density.currentText())
 
     def persist_layout(self):
@@ -684,7 +625,7 @@ class Studio:
             pass  # Already disconnected during repeated shutdown.
         self.settings.setValue("geometry", self.window.saveGeometry())
         self.settings.setValue("routingSplitVerticalV1", self.splitter.saveState())
-        self.settings.setValue("deviceSplit", self.device_splitter.saveState())
+
         for key, table in (("inputs", self.input_table), ("outputs", self.output_table)):
             self.settings.setValue(key + "Header", table.view.horizontalHeader().saveState())
         paths = [self.profiles.itemData(i) for i in range(1, self.profiles.count())]

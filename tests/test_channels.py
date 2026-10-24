@@ -136,7 +136,8 @@ def test_cable_reuse_alias_and_uninstall_guard(monkeypatch):
     backend = WindowsBackend(CableBridge())
     backend.refresh()
     assert backend.configure_cable("Music") == "Virtual output ready."
-    assert any(d.name == "Music" for d in backend.list_devices())
+    assert not any(d.name == "Music" for d in backend.list_devices())
+    assert not backend.endpoint_aliases
     assert not backend.virtual_devices
     backend.create_route("cable-out", "headphones")
     with pytest.raises(BackendError, match="Remove routes"):
@@ -175,7 +176,8 @@ def test_cable_create_installs_only_on_explicit_action_and_refreshes(monkeypatch
     assert not calls
     assert backend.configure_cable("Applications") == "Virtual output ready."
     assert calls == ["install"]
-    assert any(d.name == "Applications" for d in backend.list_devices())
+    assert not any(d.name == "Applications" for d in backend.list_devices())
+    assert not backend.endpoint_aliases
     backend.configure_cable("Music")
     assert calls == ["install"]
     assert len(json.loads(bridge.ar_devices())) > 5
@@ -202,3 +204,36 @@ def test_pending_restart_is_reported_but_ready_endpoint_is_available(monkeypatch
     monkeypatch.setattr(windows_vbcable, "install", install)
     assert "restart pending" in backend.configure_cable("Bus")
     assert backend._cable_outputs()
+
+
+@pytest.mark.parametrize("layout", ["5.1", "7.1"])
+def test_downmix_uses_positions_excludes_lfe_and_has_headroom(layout):
+    from a2router.channels import conversion_preset
+    from a2router.models import LAYOUTS
+
+    source = LAYOUTS[layout]
+    mapping = conversion_preset("Downmix to stereo", source, LAYOUTS["stereo"])
+    assert source.index("lfe") not in {c["source"] for c in mapping}
+    assert {c["source"] for c in mapping} == set(range(len(source))) - {source.index("lfe")}
+    for channel in (0, 1):
+        assert sum(c["gain"] for c in mapping if c["destination"] == channel) <= 1.00000001
+    # Channel ordering is derived from labels rather than fixed Windows/Linux indices.
+    reordered = tuple(reversed(source))
+    reverse = conversion_preset("Downmix to stereo", reordered, LAYOUTS["stereo"])
+    assert {(source[c["source"]], c["destination"]): c["gain"] for c in mapping} == {
+        (reordered[c["source"]], c["destination"]): c["gain"] for c in reverse
+    }
+
+
+def test_upmix_and_mono_downmix_are_explicit():
+    from a2router.channels import conversion_preset
+    from a2router.models import LAYOUTS
+
+    mapping = conversion_preset("Upmix stereo → surround", LAYOUTS["stereo"], LAYOUTS["7.1"])
+    assert LAYOUTS["7.1"].index("lfe") not in {c["destination"] for c in mapping}
+    center = LAYOUTS["7.1"].index("front-center")
+    assert sum(c["gain"] for c in mapping if c["destination"] == center) == 1
+    mono = conversion_preset("Downmix to mono", LAYOUTS["5.1"], LAYOUTS["mono"])
+    assert sum(c["gain"] for c in mono) == pytest.approx(1)
+    with pytest.raises(BackendError, match="Unknown source"):
+        conversion_preset("Downmix to stereo", ["channel-1", "channel-2"], LAYOUTS["stereo"])

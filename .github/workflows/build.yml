@@ -2,6 +2,19 @@ name: A2Router build
 
 on:
   workflow_dispatch:
+    inputs:
+      windows_portable:
+        description: Build Windows x64 portable ZIP
+        type: boolean
+        default: true
+      windows_setup:
+        description: Build Windows setup EXE with optional VB-CABLE
+        type: boolean
+        default: true
+      linux:
+        description: Build Linux x86_64 tar.gz and Debian package
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -12,37 +25,58 @@ concurrency:
 
 jobs:
   windows:
-    name: Windows x64 portable application
+    if: ${{ inputs.windows_portable || inputs.windows_setup }}
+    name: Windows x64 portable and setup
     runs-on: windows-2022
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           architecture: x64
-      - name: Build, check and package
+      - name: Build and test portable payload
         shell: pwsh
         run: ./tools/windows/build-portable.ps1 -Workspace "$env:RUNNER_TEMP/a2router-build" -Headless
+      - name: Locate setup compiler on runner
+        if: ${{ inputs.windows_setup }}
+        shell: pwsh
+        run: |
+          $candidates = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe", "$env:ProgramFiles\Inno Setup 7\ISCC.exe")
+          if (!($candidates | Where-Object { Test-Path -LiteralPath $_ })) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE) { throw 'Inno Setup compiler installation failed on build runner' }
+          }
+      - name: Build setup EXE without running it
+        if: ${{ inputs.windows_setup }}
+        shell: pwsh
+        run: ./tools/windows/build-setup.ps1
       - name: Upload portable application
+        if: ${{ inputs.windows_portable }}
         uses: actions/upload-artifact@v4
         with:
-          name: A2Router-windows-x64
-          path: dist/windows-x64/
+          name: A2Router-windows-x64-portable
+          path: |
+            dist/windows-x64/
+            dist/a2router-windows-x64.zip
           if-no-files-found: error
           retention-days: 14
-      - name: Upload portable ZIP
+      - name: Upload setup EXE
+        if: ${{ inputs.windows_setup }}
         uses: actions/upload-artifact@v4
         with:
-          name: A2Router-windows-x64-zip
-          path: dist/a2router-windows-x64.zip
+          name: A2Router-windows-x64-setup
+          path: |
+            dist/a2router-windows-x64-setup.exe
+            dist/a2router-windows-x64-setup.exe.sha256
           if-no-files-found: error
           retention-days: 14
 
   linux:
-    name: Linux source checks and private PipeWire tests
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    if: ${{ inputs.linux }}
+    name: Linux x86_64 portable and Debian package
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
@@ -50,16 +84,36 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install system dependencies
+      - name: Install build and audio-server dependencies on runner
         run: |
           sudo apt-get update
-          sudo apt-get install -y pipewire pipewire-pulse wireplumber pulseaudio-utils dbus-x11 libegl1 libopengl0
-      - run: python -m pip install -e '.[test]'
-      - run: ruff check a2router tests tools/windows
-      - run: ruff format --check a2router tests tools/windows
+          sudo apt-get install -y pipewire pipewire-pulse wireplumber pulseaudio-utils dbus-x11 libegl1 libopengl0 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0
+      - run: python -m pip install -e '.[test,build]'
+      - run: ruff check a2router tests tools
+      - run: ruff format --check a2router tests tools
       - run: python -m pytest -q
-      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-      - run: cmake --build build --parallel
-      - run: ctest --test-dir build --output-on-failure
+      - run: cmake -S . -B build/native -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build/native --parallel
+      - run: ctest --test-dir build/native --output-on-failure
       - name: Isolated real PipeWire integration
         run: dbus-run-session -- python tests/run_private_pipewire.py
+      - name: Freeze, smoke-test and package Linux application
+        run: bash tools/linux/build.sh
+      - name: Upload Linux portable tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: A2Router-linux-x86_64-portable
+          path: |
+            dist/a2router-linux-x86_64.tar.gz
+            dist/SHA256SUMS-linux.txt
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload Debian package
+        uses: actions/upload-artifact@v4
+        with:
+          name: A2Router-linux-amd64-deb
+          path: |
+            dist/*.deb
+            dist/SHA256SUMS-linux.txt
+          if-no-files-found: error
+          retention-days: 14

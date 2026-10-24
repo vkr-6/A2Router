@@ -128,6 +128,20 @@ HRESULT setUniformStreamVolume(IAudioStreamVolume* vol, UINT32 channelCount, flo
     return vol->SetAllVolumes(channelCount, levels.data());
 }
 
+// Called only during initialization or a user control operation, never by the
+// render callback. Verify every stream channel before reporting a gain change.
+HRESULT setVerifiedStreamVolume(IAudioStreamVolume* vol, UINT32 channels, float level) {
+    if (!vol || !channels || !std::isfinite(level)) return E_INVALIDARG;
+    HRESULT hr = setUniformStreamVolume(vol, channels, level);
+    if (FAILED(hr)) return hr;
+    std::vector<float> observed(channels);
+    hr = vol->GetAllVolumes(channels, observed.data());
+    if (FAILED(hr)) return hr;
+    for (float value : observed)
+        if (!std::isfinite(value) || std::abs(value - level) > 0.0001f) return E_FAIL;
+    return S_OK;
+}
+
 std::wstring deviceFriendlyName(IMMDevice* device) {
     ComPtr<IPropertyStore> props;
     if (FAILED(device->OpenPropertyStore(STGM_READ, &props))) return L"Unknown Device";
@@ -1136,7 +1150,7 @@ std::string AudioEngine::Impl::startLocked(const EngineConfig& cfg) {
                 hr = dev->streamVolume->GetChannelCount(&dev->volumeChannelCount);
                 if (SUCCEEDED(hr)) {
                     const float initialVolume = std::clamp(cfg.outputs[i].initial_volume, 0.0f, 1.0f);
-                    hr = setUniformStreamVolume(dev->streamVolume.Get(), dev->volumeChannelCount,
+                    hr = setVerifiedStreamVolume(dev->streamVolume.Get(), dev->volumeChannelCount,
                                                 initialVolume);
                     if (SUCCEEDED(hr)) {
                         dev->volume.store(initialVolume, std::memory_order_relaxed);
@@ -1155,6 +1169,9 @@ std::string AudioEngine::Impl::startLocked(const EngineConfig& cfg) {
                              static_cast<int64_t>(hr));
             }
 
+            if (!std::isfinite(cfg.outputs[i].initial_volume) ||
+                (std::abs(cfg.outputs[i].initial_volume - 1.0f) > 0.0001f && !dev->streamVolume))
+                return "Output cannot provide the requested verified stream gain/mute";
             try {
                 if (dev->channel_matrix) {
                     UINT32 frames = 0;
@@ -1504,9 +1521,11 @@ bool AudioEngine::setDeviceVolume(int deviceIndex, float linearVolume) {
     DeviceRuntime* dev = impl_->devices[static_cast<size_t>(deviceIndex)].get();
     if (!dev->streamVolume) return false;  // this endpoint didn't support volume control at startup
 
-    const HRESULT hr = setUniformStreamVolume(dev->streamVolume.Get(), dev->volumeChannelCount,
+    const HRESULT hr = setVerifiedStreamVolume(dev->streamVolume.Get(), dev->volumeChannelCount,
                                               linearVolume);
     if (FAILED(hr)) {
+        setUniformStreamVolume(dev->streamVolume.Get(), dev->volumeChannelCount,
+                               dev->volume.load(std::memory_order_relaxed));
         impl_->logger.event(LogLevel::Warn, Event::VolumeSetFailed, dev->index,
                             static_cast<int64_t>(hr));
         return false;

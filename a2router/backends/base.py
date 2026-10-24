@@ -53,6 +53,14 @@ class AudioBackend:
         }
 
     def _validate_route(self, route, allow_missing=False):
+        if (
+            type(route.volume) not in (int, float)
+            or not 0 <= route.volume <= 1
+            or type(route.muted) is not bool
+        ):
+            raise BackendError("Invalid route volume/mute")
+        if (route.volume != 1 or route.muted) and not self.capabilities().get("route_controls"):
+            raise BackendError("This backend cannot apply stream gain/mute")
         if type(route.delay_ms) is not int or not 0 <= route.delay_ms <= 10000:
             raise BackendError("Delay must be an integer between 0 and 10000 ms")
         if route.delay_ms and not self.capabilities().get("route_delay", False):
@@ -123,10 +131,13 @@ class AudioBackend:
         allow_missing=False,
         delay_ms=0,
         channel_map=None,
+        volume=1.0,
+        muted=False,
     ):
         if not self.capabilities()["routing"]:
             raise BackendError("Routing is unavailable in this backend")
         route = Route(source_id, destination_id, monitoring_confirmed=monitoring_confirmed, enabled=enabled)
+        route.volume, route.muted = volume, muted
         route.delay_ms = delay_ms
         route.channel_map = deepcopy(channel_map) if channel_map is not None else []
         if route_id:

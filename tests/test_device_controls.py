@@ -108,7 +108,7 @@ def test_adapter_branding_classifies_existing_endpoints_without_installing(monke
 
 
 def test_device_controls_are_verified_observations_and_do_not_restart_routes():
-    bridge = ConfigurationBridge()
+    bridge = StreamBridge()
     backend = WindowsBackend(bridge)
     backend.refresh()
     backend.create_route("cable-out", "headphones")
@@ -192,3 +192,93 @@ def test_gui_stop_allows_format_change_without_restarting_desired_route():
     backend.configure_device_format("cable-out", FORMATS[-1])
     assert backend.get_device("cable-out").channels == 16
     assert route.enabled and not backend.active_sessions
+
+
+class StreamBridge(ConfigurationBridge):
+    """Simulated stream-volume extension; not a Windows audio playback test."""
+
+    def __init__(self):
+        super().__init__()
+        self.gain_calls = []
+        self.reject_gain = None
+
+    def ar_routing_controls_version(self):
+        return 1
+
+    def ar_source_start_config(self, source, capture, ids, delays, matrices, volumes):
+        result = self.ar_source_start(source, capture, ids)
+        if result and ids:
+            for device, volume in zip(self.sessions[source]["devices"], volumes.splitlines()):
+                device["volume"] = float(volume)
+        return result
+
+    def ar_source_set_volume(self, source, capture, dest, gain):
+        self.gain_calls.append((source, dest, gain))
+        if self.reject_gain == (dest, gain):
+            return 0
+        for device in self.sessions[source]["devices"]:
+            if device["id"] == dest:
+                device["volume"] = gain
+                return 1
+        return 0
+
+
+def test_cable_stream_gain_is_live_shared_across_pins_and_restored_on_restart():
+    from a2router.controller import Controller
+
+    bridge = StreamBridge()
+    backend = WindowsBackend(bridge)
+    backend.refresh()
+    route = backend.create_route("cable-out", "headphones")
+    starts = len(bridge.starts)
+    backend.set_device_volume("cable-16", 0.3)
+    assert route.volume == 0.3 and bridge.sessions["cable-out"]["devices"][0]["volume"] == 0.3
+    assert len(bridge.starts) == starts and bridge.volume == 0.8
+    backend.set_device_mute("cable-in", True)
+    assert route.muted and bridge.sessions["cable-out"]["devices"][0]["volume"] == 0
+    controller = Controller(backend)
+    profile = controller.snapshot()
+    controller.pause_routes()
+    controller.resume_routes()
+    assert bridge.sessions["cable-out"]["devices"][0]["volume"] == 0
+    assert controller.snapshot() == profile
+    backend.set_device_mute("cable-out", False)
+    assert bridge.sessions["cable-out"]["devices"][0]["volume"] == 0.3
+
+
+def test_failed_cable_gain_rolls_back_successful_outputs():
+    bridge = StreamBridge()
+    backend = WindowsBackend(bridge)
+    backend.refresh()
+    first = backend.create_route("cable-out", "headphones")
+    second = backend.create_route("cable-out", "hdmi")
+    bridge.reject_gain = ("hdmi", 0.2)
+    with pytest.raises(BackendError, match="previous gains restored"):
+        backend.set_device_volume("cable-out", 0.2)
+    assert first.volume == second.volume == 1
+    assert all(d["volume"] == 1 for d in bridge.sessions["cable-out"]["devices"])
+
+
+def test_stream_gain_stats_failure_rolls_back_native_and_desired_state():
+    class InterruptedStats(StreamBridge):
+        unreadable = False
+
+        def ar_source_set_volume(self, source, capture, dest, gain):
+            result = super().ar_source_set_volume(source, capture, dest, gain)
+            if gain == 0.2:
+                self.unreadable = True
+            return result
+
+        def ar_stats(self):
+            if self.unreadable:
+                self.unreadable = False
+                return None
+            return super().ar_stats()
+
+    bridge = InterruptedStats()
+    backend = WindowsBackend(bridge)
+    backend.refresh()
+    route = backend.create_route("cable-out", "headphones")
+    with pytest.raises(BackendError, match="previous stream gain restored"):
+        backend.set_route_volume(route.id, 0.2)
+    assert route.volume == 1 and bridge.sessions["cable-out"]["devices"][0]["volume"] == 1

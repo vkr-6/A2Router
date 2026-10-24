@@ -1,115 +1,87 @@
-# A2Router workspace guide
+# A2Router guide
 
-## Navigation and profiles
+Audio Routing contains only configured routes, endpoint selectors, optional Channel
+Matrix and collapsed Synchronization & delay. Select a source/destination and Add
+route. Add destination routes for fan-out; multiple sources use shared-mode mixing.
+Microphone monitoring requires explicit feedback-risk confirmation. Select routes to
+enable, disable or remove them; supported Windows streams also have a selected-route
+level/mute control. Stop Routing preserves enabled choices; Start resumes enabled
+routes. Emergency Mute clears queued mutations and stops managed transport; it also
+cancels calibration without resuming playback. Ordinary stop remains serialized and
+can wait behind an active control operation.
 
-The top strip opens Audio Routing, Mixer, Devices, Virtual Devices, Calibration,
-Diagnostics and Settings. Icons sit above the captions. File/Edit/View/Routing/
-Devices/Tools/Help menus expose the same real operations and keyboard shortcuts.
-No driver is installed when the application starts.
+Mixer uses narrow observed peak meters, not history graphs. Physical endpoint levels
+affect other applications. VB-CABLE is grouped once and uses A2Router stream gain,
+which does not change the vendor endpoint master volume. Its input meter is before
+routed gain, so it can still move while routed playback is muted. With no cable
+routes, an old DLL, or differing route gains, controls explain their limitation.
+Adjust differing gains using Selected route level in Routing.
 
-Use New, Open, Save and Save As for version-1 JSON profiles. Open/recent-profile
-selection replaces the route set after confirming unsaved changes; invalid JSON
-is rejected before changing routes. CLI `load` retains its existing merge behavior.
-Unavailable endpoints remain pending and retain their stable device IDs. Profile
-switching retains existing virtual devices rather than deleting shared audio
-resources; New clears routes and aliases, not installed virtual devices. A `*`
-marks changes since the last named-profile save; automatic session persistence
-is separate. UI layout and theme preferences use QSettings, not audio-profile JSON.
+Devices combines input/output inventory and Configure. Physical endpoints and cable
+pins can be selected for exact format scanning where the backend supports it. Only
+accepted formats are offered; stop dependent routes before applying changes. Keep
+Windows/vendor endpoint names. The base cable has several pins sharing one cable;
+it does not provide independent virtual cables. Install/remove driver actions remain
+explicit and may request UAC. Review restart requirements; no reboot is forced.
 
-Shortcuts: Ctrl+N new; Ctrl+O open; Ctrl+S save; Ctrl+Shift+S save as; Ctrl+R/F5
-refresh; Ctrl+F input filter; Ctrl+Shift+M emergency stop; F1 guide. Global system
-hotkeys and undo/redo are not implemented.
+Profiles are only in File: New, Open, Save, Save As and Recent profiles. Invalid JSON
+is rejected before replacing routes. Missing endpoints retain desired definitions.
+Virtual devices omitted from another profile are retained for ownership safety.
+Old version-1 profiles remain readable; optional volume/muted/calibration fields
+extend that schema. Audio profiles do not include UI themes/layout preferences.
 
-## Routing Configuration
+Channel Matrix has dynamic source/destination axes. Double-click connections or edit
+the sparse list. Select cells for bulk gain/disconnect. Presets explicitly load a
+draft; Add route or Apply to selected route performs the operation. Existing-route
+changes warn about a source restart and attempt rollback on backend failure.
 
-Input/output tables show observed devices, IDs, channels, rates, formats and state.
-Select an input and output, check microphone monitoring only when safe, and Add
-route. Multiple destination routes provide fan-out; multiple sources use the
-OS/native shared-mode mixing path. No endpoint is substituted for a missing ID.
+Downmix to stereo uses front channels plus attenuated centre/surround contributions,
+excludes LFE and normalizes for coherent full-scale headroom. Mono downmix also
+excludes LFE. Stereo upmix copies fronts, derives centre at 0.5 L + 0.5 R, and uses
+attenuated copies for surround pairs; LFE stays silent. This is stereo expansion,
+not recovered discrete surround. Conversion uses reported positions, never guessed
+indices. The native matrix clamps mixed samples; processed paths are not bit-perfect.
+Linux custom matrices remain unavailable.
 
-Double-click output volume or mute to edit supported endpoint controls. These
-are system endpoint controls and affect other applications using the endpoint.
-Changes are confirmed by backend observations. Unsupported measurements show N/A.
+Calibration is Windows-only and requires the updated native DLL, a physical
+microphone and at least two physical outputs. Choose the microphone channel,
+checked outputs, reference output, pass count and conservative test level. Keep the
+microphone fixed at the listening position, hardware volume safe and other apps
+quiet. A confirmation precedes sequential first-channel chirps. Native recording and
+playback are separate from GUI rendering; Python analyzes only completed recordings.
 
-Use the table filters, column-header sorting and draggable columns. Right-click
-headers to show/hide columns; right-click rows to copy or export CSV. Column widths,
-visibility/order, window geometry and splitter positions are remembered.
+Measurement stops managed routes temporarily and restores their previous enabled
+states after completion, cancellation or failure. Cancel stops the current test.
+Emergency Mute/Exit suppress restoration of playback. Invalid request preflight does
+not stop routes. Mic permission, format, timestamp, discontinuity, underrun, clipping,
+noise, ambiguous reflections and unstable-pass errors are reported.
 
-Select multiple routes for Enable, Disable or Remove, including through the
-context menu. These edit desired profile state. Start Routing runs enabled routes;
-Stop Routing stops managed transport while retaining enabled/disabled choices.
-Polling and reconnect recovery respect the stopped state. Emergency Mute discards
-queued UI mutations and requests transport stop without changing system volumes;
-it waits behind the currently executing control operation and is not a hardware
-panic switch. Review any stop errors. Explicit Start resumes enabled routes.
-Closing hides/minimizes the window; File → Exit stops the Windows engine. Linux
-server-owned routes can remain running after controller exit, as before.
+Results are arrival offsets relative to the selected reference and compensation
+relative to the slowest measured output. Earlier devices are delayed; no device is
+made to play earlier than physically possible. Confidence is a heuristic based on
+normalized correlation and repeated-pass spread, not a statistical precision claim.
+The capture reference uses QPC timestamps and a software-render-start epoch; startup
+jitter, room propagation, reflections and hardware/transport delay cannot be fully
+separated. A strongest matched arrival may not equal the earliest room reflection.
 
-## Synchronization and delay
+Review/edit compensation, then Apply reviewed delays. All configured routes to the
+measured outputs receive those requests. Native requests round to integer ms; large
+changes need explicit source-restart permission. A partial failure attempts rollback
+and reports failed recovery. Revert edits restores recommendations in the table;
+it does not undo already applied engine delays. File → Save stores calibration
+metadata and desired route delays; Export measurement writes reviewed JSON metadata.
+The full Windows acoustic path still requires target-machine build/hardware testing.
 
-Open Audio Routing → Routing Configuration → Synchronization & Delay Compensation.
-Choose a route, edit its additional delay and Apply. Discard edit restores the
-saved request. Native delay controls currently accept integer milliseconds, not
-fractional milliseconds. A stopped route retains the request without starting audio.
+Settings offers System/White/Dark/Lime/Blue/Violet and density. The new A-squared logo
+is an original vector adaptation of the supplied reference. Diagnostics contains
+backend observations and logs; export prompts for review of IDs/names/library paths.
 
-Supported live updates adjust the target inside the existing ring-buffer ceiling.
-If that cannot work, the source can restart only when the restart checkbox allows
-it. Other outputs sharing that capture source can be affected by a restart. The
-native clock controller remains automatic; buffer/target, rate correction,
-underruns and clipping come from native observations. No editable reference clock,
-buffer target, drift tolerance or acoustic measurement is exposed.
+Shortcuts: Ctrl+N/Open Ctrl+O/Save Ctrl+S/Save As Ctrl+Shift+S, refresh Ctrl+R/F5,
+filter Ctrl+F, emergency Ctrl+Shift+M, help F1. Closing hides/minimizes; File → Exit
+stops Windows native processing. Linux server-owned routes can remain running.
 
-Latency values are not acoustic arrival times. If independent measurements show
-12/40/75 ms arrivals, manual relative compensation would be +63/+35/+0 ms; A2Router
-does not currently measure or automatically apply that example. Calibration is
-explicitly deferred to the next upgrade and its page links to manual controls.
-
-## Channel Matrix
-
-Select endpoints in Routing Configuration, then open Channel Matrix. Rows follow
-the reported source channels and columns follow destination channels, up to the
-backend's supported limits. Enable Custom channel routing for explicit processing.
-Double-click a grid cell to connect/disconnect it. Select several cells, set gain
-and use Set selected gains or Disconnect selected. The sparse connection list
-below remains editable and uses the same draft.
-
-Identity, Stereo swap and normalized Mono sum presets require appropriate actual
-channel counts. Mono sum uses 1/N gain per input and duplicates the sum to selected
-output channels. No implicit surround downmix preset or guessed layout is used.
-Unmapped destination channels are silent. Maps have a 1024-connection limit.
-
-Add route uses the draft for a new route. To edit an existing route, select it in
-Routing Configuration, Load selected route, edit, and Apply to selected route.
-The confirmation explains the source restart and silent unmapped channels. Invalid
-maps are rejected; a rejected backend connection restores the previous map and
-reports any recovery failure. Gains outside this editor's −60..+12 dB range,
-including phase-inverted gains, cannot be loaded losslessly and are rejected for
-editing; their saved route definitions remain intact.
-
-Windows performs real-time processing in C++, including remapping, duplication,
-summing and peak clamping. It is not bit-perfect. Linux custom maps remain
-unsupported, with an explanatory disabled editor. Advanced Processing describes
-implemented matrix processing and links to its controls; EQ, compressors, pan,
-exclusive mode and a test-tone generator are absent.
-
-## Mixer, virtual endpoints and diagnostics
-
-Mixer exposes supported endpoint volume/mute and observed Windows peak history.
-No RMS or CPU measurements are synthesized. Linux peak graphs remain unavailable.
-Devices provides selected endpoint specifications. Virtual Devices retains the
-explicit VB-CABLE installation/removal confirmations, supported-format scan,
-channel/rate/bit-depth selection and Windows rename. Stop transport before format
-changes. Vendor files and authenticity verification remain unchanged. A single
-base cable cannot create unlimited independent devices.
-
-A rename reopens the Windows endpoint/property store for verification and retries
-briefly for delayed observation. A rejected write does not cause an unnecessary
-rollback write. Access-denied writes/commits use the existing explicit elevation
-flow in the portable app. Failures include the actual HRESULT; the app does not
-claim success without a verified name. Windows target validation remains necessary.
-
-Diagnostics shows backend observations and a bounded timestamped action/error log.
-Export prompts for review because device names/IDs and library paths can identify
-a system. The JSON export is written atomically on the worker. Clear visible log
-only clears the app log. Settings offers System/Light/Dark and two density choices.
-Windows Sound and Volume Mixer commands are available only on Windows.
+Windows distribution includes a portable ZIP and optional setup EXE. Setup checkboxes
+control shortcuts, launch and optional shared-driver installation; driver installation
+and removal are unchecked by default. Uninstall preserves profiles and the shared
+driver unless explicitly selected. Linux has separate tar.gz and .deb packages;
+PipeWire and desktop system libraries are dependencies, not bundled audio services.

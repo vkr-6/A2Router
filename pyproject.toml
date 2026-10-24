@@ -7,7 +7,7 @@ name = "a2router"
 version = "0.1.0"
 description = "Advanced Audio Router: native audio-server routing with a Qt settings interface"
 requires-python = ">=3.10"
-dependencies = ["PySide6-Essentials>=6.6,<7"]
+dependencies = ["PySide6-Essentials>=6.6,<7", "numpy>=1.26,<3"]
 
 [project.optional-dependencies]
 test = ["pytest>=8", "ruff==0.17.1"]

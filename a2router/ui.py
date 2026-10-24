@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QProcess, QSignalBlocker, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -42,6 +42,7 @@ from a2router.models import BackendError, VirtualDevice
 class Results(QObject):
     ready = Signal(object, object, str)
     closed = Signal(str)
+    progress = Signal(int, int, str)
 
 
 class MainWindow(QMainWindow):
@@ -129,6 +130,12 @@ class MainWindow(QMainWindow):
             self.event_timer.setInterval(250)
             self.event_timer.timeout.connect(self.refresh)
             self.subscription = QProcess(self)
+            from a2router.backends.linux_pipewire import system_audio_environment
+
+            environment = QProcessEnvironment()
+            for key, value in system_audio_environment().items():
+                environment.insert(key, value)
+            self.subscription.setProcessEnvironment(environment)
             self.subscription.setProgram("pactl")
             self.subscription.setArguments(["subscribe"])
             self.subscription.readyReadStandardOutput.connect(self._audio_event)
@@ -191,14 +198,10 @@ class MainWindow(QMainWindow):
         actions.addStretch()
 
     def change_device_volume(self, device_id, volume):
-        self.submit(
-            lambda: self.backend.set_device_volume(device_id, volume), persist=False, refresh_backend=False
-        )
+        self.submit(lambda: self.backend.set_device_volume(device_id, volume), refresh_backend=False)
 
     def change_device_mute(self, device_id, muted):
-        self.submit(
-            lambda: self.backend.set_device_mute(device_id, muted), persist=False, refresh_backend=False
-        )
+        self.submit(lambda: self.backend.set_device_mute(device_id, muted), refresh_backend=False)
 
     def poll_meters(self):
         if not self.busy and self.tabs.currentIndex() in (0, 1) and self.backend.capabilities().get("meters"):
@@ -294,6 +297,50 @@ class MainWindow(QMainWindow):
         self.button(row, "Enable", lambda: self.route_action("enable_route"), capable)
         self.button(row, "Disable", lambda: self.route_action("disable_route"), capable)
         self.button(row, "Remove route", lambda: self.route_action("remove_route"), capable)
+        level_row = QHBoxLayout()
+        level_row.addWidget(QLabel("Selected route level"))
+        self.route_level = QSpinBox()
+        self.route_level.setRange(0, 100)
+        self.route_level.setSuffix(" %")
+        level_row.addWidget(self.route_level)
+        self.route_muted = QCheckBox("Mute")
+        level_row.addWidget(self.route_muted)
+        self.route_level_apply = self.button(
+            level_row,
+            "Apply level",
+            self.apply_route_level,
+            self.backend.capabilities().get("route_controls", False),
+        )
+        self.route_level_apply.setToolTip("A2Router stream gain; Windows DLL stream-controls API required")
+        level_row.addStretch()
+        layout.addLayout(level_row)
+        self.route_tree.itemSelectionChanged.connect(self._route_level_selected)
+        self._route_level_selected()
+
+    def _route_level_selected(self):
+        selected = self.route_tree.selectedItems()
+        route = self.view_routes.get(selected[0].data(0, Qt.UserRole), {}) if len(selected) == 1 else {}
+        if hasattr(self, "route_level"):
+            with QSignalBlocker(self.route_level):
+                self.route_level.setValue(round(route.get("volume", 1.0) * 100))
+            self.route_muted.setChecked(route.get("muted", False))
+            capable = bool(route) and self.backend.capabilities().get("route_controls", False)
+            self.route_level.setEnabled(capable)
+            self.route_muted.setEnabled(capable)
+            self.route_level_apply.setProperty("capable", capable)
+            self.route_level_apply.setEnabled(capable)
+
+    def apply_route_level(self):
+        selected = self.route_tree.selectedItems()
+        if len(selected) != 1:
+            self.error.setText("Select one route to adjust its playback level")
+            return
+        ident, volume, muted = (
+            selected[0].data(0, Qt.UserRole),
+            self.route_level.value() / 100,
+            self.route_muted.isChecked(),
+        )
+        self.submit(lambda: self.backend.set_route_volume(ident, volume, muted))
 
     def add_route(self):
         source, dest = self.source.currentData(), self.destination.currentData()
@@ -440,15 +487,16 @@ class MainWindow(QMainWindow):
             self.virtual_tree.setMaximumHeight(210)
             for column, width in enumerate((300, 100, 300, 120)):
                 self.virtual_tree.setColumnWidth(column, width)
-            group = QGroupBox("Endpoint configuration")
+            group = QGroupBox("Device format")
             form = QFormLayout(group)
-            form.setContentsMargins(18, 22, 18, 18)
-            form.setSpacing(12)
+            form.setContentsMargins(8, 14, 8, 8)
+            form.setSpacing(6)
             self.cable_endpoint = QComboBox()
             self.cable_endpoint.currentIndexChanged.connect(self._cable_selection_changed)
             form.addRow("Endpoint", self.cable_endpoint)
             row = QHBoxLayout()
             self.endpoint_name = QLineEdit()
+            self.endpoint_name.setReadOnly(True)
             row.addWidget(self.endpoint_name, 1)
             self.rename_button = self.button(
                 row,
@@ -456,7 +504,11 @@ class MainWindow(QMainWindow):
                 self.rename_cable_endpoint,
                 self.backend.capabilities().get("device_rename", False),
             )
-            form.addRow("Windows name", row)
+            self.endpoint_name.setParent(group)
+            self.rename_button.setParent(group)
+            self.endpoint_name.hide()
+            self.rename_button.hide()
+            # Keep Windows/vendor names; no endpoint-renaming action is exposed.
             row = QHBoxLayout()
             self.channel_choice = QComboBox()
             self.channel_choice.currentIndexChanged.connect(self._format_channel_changed)
@@ -749,31 +801,8 @@ class MainWindow(QMainWindow):
 
     def _settings_page(self):
         layout = self.page("Settings")
-        profiles = QGroupBox("Routing profiles")
-        box = QVBoxLayout(profiles)
-        box.setContentsMargins(18, 22, 18, 18)
-        caption = QLabel("Save your current routes or restore a profile.")
-        caption.setObjectName("MutedText")
-        box.addWidget(caption)
-        row = QHBoxLayout()
-        self.button(row, "Save profile…", self.save_profile)
-        self.button(row, "Load profile…", self.load_profile)
-        row.addStretch()
-        box.addLayout(row)
-        layout.addWidget(profiles)
-        diagnostic_group = QGroupBox("Diagnostics")
-        box = QVBoxLayout(diagnostic_group)
-        box.setContentsMargins(18, 22, 18, 18)
-        row = QHBoxLayout()
-        label = QLabel(self.backend.name)
-        label.setObjectName("MutedText")
-        row.addWidget(label, 1)
-        self.button(row, "Refresh diagnostics", self.refresh)
-        box.addLayout(row)
-        self.diagnostics = QPlainTextEdit()
+        self.diagnostics = QPlainTextEdit(self)
         self.diagnostics.setReadOnly(True)
-        box.addWidget(self.diagnostics)
-        layout.addWidget(diagnostic_group, 1)
         hint = QLabel(
             "Closing the window keeps routes running. Use Exit A2Router to stop the Windows engine."
         )
@@ -821,6 +850,7 @@ class MainWindow(QMainWindow):
             except Exception as exc:  # noqa: BLE001 — display worker failures and keep Qt alive
                 message = str(exc)
             snapshot = {
+                "calibration": self.controller.calibration,
                 "devices": [asdict(d) for d in self.backend.list_devices()],
                 "routes": [asdict(r) for r in self.backend.list_routes()],
                 "virtual_devices": self.controller.snapshot()["virtual_devices"],
@@ -841,6 +871,7 @@ class MainWindow(QMainWindow):
 
     def _finished(self, snapshot, background, message):
         self.busy = False
+        self.studio.calibration_panel.operation_finished(message)
         for button in self.buttons:
             button.setEnabled(bool(button.property("capable")))
         if snapshot:
@@ -949,6 +980,10 @@ class MainWindow(QMainWindow):
                 (device["id"], [label, device["kind"], classification, device["state"], format_text])
             )
             selector_label = label + (f" · {device['channels']} ch" if device.get("channels") else "")
+            if device.get("properties", {}).get("virtual_driver") == "VB-CABLE" and device["id"].startswith(
+                "wasapi-loopback:"
+            ):
+                continue
             (source_rows if device["kind"] == "input" else destination_rows).append(
                 (device["id"], selector_label)
             )
@@ -1036,27 +1071,31 @@ class MainWindow(QMainWindow):
         )
         virtual_rows = []
         if self._vbcable_page:
-            for device in snapshot["devices"]:
-                props = device.get("properties", {})
-                if props.get("virtual_driver") == "VB-CABLE" and (
-                    device["kind"] == "output" or props.get("capture_endpoint_id")
-                ):
-                    virtual_rows.append(
-                        (
-                            device["id"],
-                            [
-                                device["name"],
-                                device["kind"],
-                                f"{device['channels'] or '?'} ch · {device['sample_rate'] or '?'} Hz · {device['sample_format'] or '?'}",
-                                device["state"],
-                            ],
-                        )
+            pins = [
+                d
+                for d in snapshot["devices"]
+                if d.get("properties", {}).get("virtual_driver") == "VB-CABLE"
+                and (d["kind"] == "output" or d.get("properties", {}).get("capture_endpoint_id"))
+            ]
+            if pins:
+                playback = sum(d["kind"] == "output" for d in pins)
+                recording = len(pins) - playback
+                virtual_rows.append(
+                    (
+                        "vbcable:base",
+                        [
+                            "VB-CABLE",
+                            "Shared virtual cable",
+                            f"{playback} playback / {recording} recording pins",
+                            "Connected",
+                        ],
                     )
+                )
             present = bool(virtual_rows)
             self.vbcable_status.setText(
                 "VB-CABLE connected"
                 if present
-                else "Click Create output to install VB-CABLE. Administrator approval is required."
+                else "VB-CABLE is not installed. Adding it requires administrator approval."
             )
             if present and not self.virtual_name.text():
                 alias = next(
@@ -1069,15 +1108,16 @@ class MainWindow(QMainWindow):
                 )
                 if alias:
                     self.virtual_name.setText(alias)
-            self.virtual_name.setVisible(not present)
+            self.virtual_name.hide()
             self.install_cable_button.setVisible(not present)
             self.install_cable_button.setText("Add VB-CABLE")
             previous_endpoint = self.cable_endpoint.currentData()
             self._update_combo(
                 self.cable_endpoint,
                 [
-                    (ident, self.view_devices[ident]["name"] + " · " + self.view_devices[ident]["kind"])
-                    for ident, _ in virtual_rows
+                    (device["id"], device["name"] + " · " + device["kind"])
+                    for device in snapshot["devices"]
+                    if not device["id"].startswith("wasapi-loopback:")
                 ],
             )
             if previous_endpoint != self.cable_endpoint.currentData():
@@ -1100,6 +1140,8 @@ class MainWindow(QMainWindow):
         self.studio.update(snapshot)
 
     def closeEvent(self, event):
+        if not self.exit_ready and not self.exiting and self.studio.calibration_panel.running:
+            self.studio.calibration_panel.cancel_measurement()
         if self.exit_ready:
             event.accept()
         elif self.exiting:
@@ -1113,6 +1155,7 @@ class MainWindow(QMainWindow):
             event.ignore()
 
     def exit_application(self):
+        self.controller.request_emergency_stop()
         self.studio.persist_layout()
         self.timer.stop()
         self.meter_timer.stop()

@@ -3,6 +3,7 @@
 #include "Logging.h"
 #include "ChannelMatrix.h"
 #include "EndpointRename.h"
+#include "CalibrationSignal.h"
 #include <limits>
 #include <cmath>
 #include <array>
@@ -13,6 +14,14 @@
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 int main() {
     try {
+        require(a2r::calibrationChirp(-1) == 0 && a2r::calibrationChirp(0) == 0 &&
+            a2r::calibrationChirp(a2r::chirpDuration) == 0, "calibration chirp bounds");
+        uint8_t encoded[4]{};
+        const mux::PcmEncoding calibrationPcm{1, 32, 24, false};
+        a2r::writeCalibrationSample(encoded, calibrationPcm, 0.025);
+        require(std::abs(calibrationPcm.read(encoded) - 0.025) < 1e-6, "calibration PCM valid-bit encoding");
+        for (int i = 0; i < 8640; ++i)
+            require(std::abs(a2r::calibrationChirp(i / 48000.0)) <= 1, "calibration chirp amplitude");
         // A rejected property write must not trigger a second, equally denied
         // rollback write or obscure the original access-denied HRESULT.
         std::wstring name = L"Original";

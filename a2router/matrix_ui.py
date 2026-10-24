@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from a2router.models import BackendError
+
 
 class MatrixEditor(QWidget):
     def __init__(self, window):
@@ -26,7 +28,16 @@ class MatrixEditor(QWidget):
         layout.setContentsMargins(4, 4, 4, 4)
         row = QHBoxLayout()
         self.preset = QComboBox()
-        self.preset.addItems(["Identity", "Stereo swap", "Mono sum (normalized)"])
+        self.preset.addItems(
+            [
+                "Identity",
+                "Stereo swap",
+                "Mono sum (normalized)",
+                "Downmix to stereo",
+                "Downmix to mono",
+                "Upmix stereo → surround",
+            ]
+        )
         row.addWidget(self.preset)
         apply_preset = QPushButton("Load preset")
         apply_preset.clicked.connect(self.load_preset)
@@ -153,6 +164,27 @@ class MatrixEditor(QWidget):
         w = self.window
         inputs, outputs = self.grid.rowCount(), self.grid.columnCount()
         name = self.preset.currentText()
+        if name.startswith(("Downmix", "Upmix")):
+            from a2router.channels import conversion_preset
+
+            source = w.view_devices.get(w.source.currentData(), {})
+            destination = w.view_devices.get(w.destination.currentData(), {})
+            try:
+                mapping = conversion_preset(
+                    name, source.get("positions", []), destination.get("positions", [])
+                )
+            except BackendError as exc:
+                w.error.setText(str(exc))
+                return
+            w.channel_table.setRowCount(0)
+            w.channel_group.setChecked(True)
+            for item in mapping:
+                self.connect_cell(item["source"], item["destination"], 20 * math.log10(item["gain"]))
+            self.refresh()
+            self.state.setText(
+                "Explicit conversion draft: LFE is excluded; stereo expansion duplicates channels rather than recovering discrete surround. Review before applying."
+            )
+            return
         if name == "Stereo swap" and (inputs != 2 or outputs != 2):
             w.error.setText("Stereo swap requires two source and two destination channels")
             return

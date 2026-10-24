@@ -61,4 +61,6 @@ class Route:
     status: str = "pending"
     error: str = ""
     resource_ids: list[str] = field(default_factory=list)
+    volume: float = 1.0  # Native per-stream gain, independent of system endpoint volume.
+    muted: bool = False
     delay_ms: int = 0  # Windows native per-output additional buffering; 0 preserves old profiles.

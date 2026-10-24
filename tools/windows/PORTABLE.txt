@@ -42,3 +42,12 @@ OpenAI Codex under the owner's direction. See THIRD_PARTY_NOTICES.md and license
 
 Original A2Router contributions: MIT; see LICENSE and LICENSING.md for exclusions.
 Imported MultiRoute code and VB-CABLE are separately governed.
+
+Current UI: Devices combines inventory/virtual configuration; profiles are in File
+only. Mixer uses compact meters. Cable gain/mute applies to A2Router routed streams;
+the incoming cable meter is before that gain. Vendor endpoint names are retained.
+Channel Matrix offers explicit downmix/upmix presets with LFE excluded.
+Windows calibration records a fixed microphone while testing outputs sequentially.
+Review results before applying. New native functions require a rebuilt DLL and
+hardware validation. Setup is a separate optional distribution; driver choices are
+unchecked by default and are never executed during building.

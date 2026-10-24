@@ -18,6 +18,16 @@ from a2router.backends.base import AudioBackend
 from a2router.models import LAYOUTS, BackendError, Device
 
 
+def system_audio_environment():
+    """Use host audio utilities with host libraries, including in a frozen bundle."""
+    environment = {**os.environ, "LC_ALL": "C"}
+    if "LD_LIBRARY_PATH_ORIG" in environment:
+        environment["LD_LIBRARY_PATH"] = environment["LD_LIBRARY_PATH_ORIG"]
+    elif getattr(__import__("sys"), "frozen", False):
+        environment.pop("LD_LIBRARY_PATH", None)
+    return environment
+
+
 class PipeWireBackend(AudioBackend):
     name = "PipeWire-Pulse (pactl)"
 
@@ -44,7 +54,7 @@ class PipeWireBackend(AudioBackend):
                 capture_output=True,
                 text=True,
                 timeout=8,
-                env={**os.environ, "LC_ALL": "C"},
+                env=system_audio_environment(),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise BackendError(f"pactl unavailable: {exc}") from exc

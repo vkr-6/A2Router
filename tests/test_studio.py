@@ -77,7 +77,6 @@ def test_workspace_navigation_and_real_transport_actions(app):
             "Audio Routing",
             "Mixer",
             "Devices",
-            "Virtual Devices",
             "Calibration",
             "Diagnostics",
             "Settings",
@@ -217,6 +216,9 @@ def test_telemetry_update_does_not_overwrite_volume_editor_draft(app):
     try:
         window.show()
         wait(app, window)
+        window.navigation.setCurrentRow(2)
+        window.studio.device_tabs.setCurrentIndex(0)
+        app.processEvents()
         table = window.studio.output_table
         proxy_row = next(
             r
@@ -238,7 +240,7 @@ def test_telemetry_update_does_not_overwrite_volume_editor_draft(app):
         shutdown(app, window)
 
 
-@pytest.mark.parametrize("theme", ["Light", "Dark", "System"])
+@pytest.mark.parametrize("theme", ["White", "Dark", "Lime", "Blue", "Violet", "System"])
 def test_compact_workspace_controls_remain_visible_at_target_size(app, theme):
     backend = MockBackend()
     window = MainWindow(Controller(backend))
@@ -252,8 +254,8 @@ def test_compact_workspace_controls_remain_visible_at_target_size(app, theme):
         assert window.navigation.height() <= 58
         assert window.route_tree.isVisible()
         assert window.add_route_button.isVisible()
-        assert window.studio.input_table.view.isVisible()
-        assert window.studio.output_table.view.isVisible()
+        assert not window.studio.routing_tabs.isAncestorOf(window.studio.input_table)
+        assert not window.studio.routing_tabs.isAncestorOf(window.studio.output_table)
         assert window.studio.actions["emergency"].associatedObjects()
         window.studio.open_delay()
         app.processEvents()

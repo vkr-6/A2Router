@@ -19,7 +19,7 @@ def _uuid(value):
 
 def validate(data):
     try:
-        if not isinstance(data, dict) or set(data) - {"endpoint_aliases"} != {
+        if not isinstance(data, dict) or set(data) - {"endpoint_aliases", "calibration"} != {
             "version",
             "virtual_devices",
             "routes",
@@ -27,6 +27,10 @@ def validate(data):
             raise ValueError("Expected version, virtual_devices, and routes")
         if type(data["version"]) is not int or data["version"] != 1:
             raise ValueError("Unsupported configuration version")
+        if "calibration" in data:
+            from a2router.calibration import validate_result
+
+            validate_result(data["calibration"])
         aliases = data.get("endpoint_aliases", {})
         if not isinstance(aliases, dict) or len(aliases) > 1000:
             raise ValueError("Invalid endpoint aliases")
@@ -65,7 +69,7 @@ def validate(data):
                     if item["layout"] not in LAYOUTS:
                         raise ValueError("Unsupported layout")
                 else:
-                    if set(item) - {"delay_ms"} != {
+                    if set(item) - {"delay_ms", "volume", "muted"} != {
                         "id",
                         "source_id",
                         "destination_id",
@@ -79,6 +83,13 @@ def validate(data):
                             raise ValueError("Invalid endpoint ID")
                     if type(item["enabled"]) is not bool or type(item["monitoring_confirmed"]) is not bool:
                         raise ValueError("Route states must be booleans")
+                    volume = item.get("volume", 1.0)
+                    if (
+                        type(volume) not in (int, float)
+                        or not 0 <= volume <= 1
+                        or type(item.get("muted", False)) is not bool
+                    ):
+                        raise ValueError("Invalid stream volume/mute")
                     delay = item.get("delay_ms", 0)
                     if type(delay) is not int or not 0 <= delay <= 10000:
                         raise ValueError("Delay must be an integer between 0 and 10000 ms")
@@ -102,6 +113,11 @@ def load(path):
 
 def save(path, data):
     validate(data)  # Never touch an existing valid file if validation fails.
+    atomic_json(path, data)
+
+
+def atomic_json(path, data):
+    """Write reviewed JSON metadata atomically; callers validate their own schema."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = None

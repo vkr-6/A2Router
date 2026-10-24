@@ -3,7 +3,8 @@
 The root MIT license applies to the original A2Router contributions: the Python
 package, application assets, tests, build automation, new documentation, and the
 native integration files `src/PythonBridge.cpp`, `src/WindowsEndpointControl.h`,
-`src/ChannelMatrix.h` and `src/EndpointRename.h`.
+`src/ChannelMatrix.h`, `src/EndpointRename.h`, `src/CalibrationSignal.h`
+and `src/WindowsCalibration.h`.
 
 The following are excluded from that license grant:
 

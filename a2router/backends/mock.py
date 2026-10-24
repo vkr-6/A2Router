@@ -38,7 +38,12 @@ class MockBackend(AudioBackend):
                 }
 
     def capabilities(self):
-        return {**super().capabilities(), "channel_routing": True, "device_controls": True}
+        return {
+            **super().capabilities(),
+            "channel_routing": True,
+            "device_controls": True,
+            "route_controls": True,
+        }
 
     def refresh(self, reconcile=True):
         if not reconcile:
@@ -87,6 +92,12 @@ class MockBackend(AudioBackend):
     def _remove_virtual(self, config):
         self.devices.pop(config.device_id, None)
         self.devices.pop("source:" + config.device_id.removeprefix("sink:") + ".monitor", None)
+
+    def set_route_volume(self, route_id, volume=None, muted=None):
+        route = self.get_route_status(route_id)
+        route.volume = route.volume if volume is None else volume
+        route.muted = route.muted if muted is None else muted
+        self._validate_route(route)
 
     def set_device_volume(self, device_id, volume):
         from a2router.models import BackendError

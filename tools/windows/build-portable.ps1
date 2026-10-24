@@ -92,7 +92,7 @@ if (Test-Path "$Workspace\dist") { Remove-Item "$Workspace\dist" -Recurse -Force
 New-Item -ItemType Directory -Force "$Workspace\dist" | Out-Null
 & $python tools/windows/make_icon.py a2router/assets/a2router.svg "$Workspace/build/a2router.ico"
 if ($LASTEXITCODE) { throw 'Application icon generation failed' }
-& $python -m PyInstaller --noconfirm --clean --onefile --windowed --name a2router --icon "$Workspace/build/a2router.ico" --hidden-import PySide6.QtSvg --add-data "$Workspace/a2router/assets;a2router/assets" --paths $Workspace --add-binary "$native\a2router_wasapi.dll;." --distpath "$Workspace\dist" --workpath "$Workspace\build\pyinstaller" --specpath "$Workspace\build" tools\windows\portable_entry.py
+& $python -m PyInstaller --noconfirm --clean --onefile --windowed --name a2router --icon "$Workspace/build/a2router.ico" --hidden-import PySide6.QtSvg --hidden-import numpy.fft --add-data "$Workspace/a2router/assets;a2router/assets" --paths $Workspace --add-binary "$native\a2router_wasapi.dll;." --distpath "$Workspace\dist" --workpath "$Workspace\build\pyinstaller" --specpath "$Workspace\build" tools\windows\portable_entry.py
 if ($LASTEXITCODE) { throw 'Freezing the GUI application failed' }
 
 if (!$SkipTests) {
@@ -115,6 +115,7 @@ Copy-Item "$source\vendor\vbcable\NOTICE.txt" "$Workspace\dist\vendor\VB-CABLE-N
 Copy-Item "$source\tools\windows\install-vbcable.ps1" "$Workspace\dist\vendor\install-vbcable.ps1" -Force
 & $python tools\windows\collect_licenses.py "$Workspace\dist"
 if ($LASTEXITCODE) { throw 'Runtime license collection failed' }
+Copy-Item "$Workspace\build\a2router.ico" "$Workspace\dist\a2router.ico" -Force
 Copy-Item "$source\tools\windows\PORTABLE.txt" "$Workspace\dist\README.txt" -Force
 Copy-Item "$source\THIRD_PARTY_NOTICES.md" "$Workspace\dist\THIRD_PARTY_NOTICES.md" -Force
 Copy-Item "$source\LICENSE" "$Workspace\dist\LICENSE" -Force

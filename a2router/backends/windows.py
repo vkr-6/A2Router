@@ -4,6 +4,7 @@ import ctypes
 import json
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -32,6 +33,7 @@ class WindowsBackend(AudioBackend):
         self.active_delays = {}
         self.active_matrices = {}
         self.format_cache = {}
+        self._calibration_cancel = threading.Event()
         self.has_matrix_api = bridge is not None and hasattr(bridge, "ar_source_start_matrix")
         self.has_live_delay_api = bridge is not None and hasattr(bridge, "ar_source_set_delay")
         self.has_delay_api = bridge is not None and hasattr(bridge, "ar_source_start_delays")
@@ -82,6 +84,22 @@ class WindowsBackend(AudioBackend):
                     "ar_set_device_mute": ([ctypes.c_wchar_p, ctypes.c_int], ctypes.c_int),
                     "ar_device_formats": ([ctypes.c_wchar_p], ctypes.c_char_p),
                     "ar_set_device_format": ([ctypes.c_wchar_p] + [ctypes.c_int] * 5, ctypes.c_int),
+                    "ar_source_start_config": (
+                        [ctypes.c_wchar_p, ctypes.c_int] + [ctypes.c_wchar_p] * 4,
+                        ctypes.c_int,
+                    ),
+                    "ar_source_set_volume": (
+                        [ctypes.c_wchar_p, ctypes.c_int, ctypes.c_wchar_p, ctypes.c_float],
+                        ctypes.c_int,
+                    ),
+                    "ar_calibration_record": (
+                        [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_float, ctypes.c_int],
+                        ctypes.c_char_p,
+                    ),
+                    "ar_calibration_reset": ([], None),
+                    "ar_calibration_cancel": ([], None),
+                    "ar_calibration_version": ([], ctypes.c_int),
+                    "ar_routing_controls_version": ([], ctypes.c_int),
                     "ar_rename_device": ([ctypes.c_wchar_p, ctypes.c_wchar_p], ctypes.c_int),
                 }
                 for name, (arguments, result) in signatures.items():
@@ -106,6 +124,23 @@ class WindowsBackend(AudioBackend):
             "live_route_delay": self.bridge is not None and self.has_live_delay_api,
             "route_delay": self.bridge is not None and self.has_delay_api,
             "channel_routing": self.bridge is not None and self.has_matrix_api,
+            "route_controls": self.bridge is not None
+            and all(
+                hasattr(self.bridge, name)
+                for name in ("ar_source_start_config", "ar_source_set_volume", "ar_routing_controls_version")
+            )
+            and self.bridge.ar_routing_controls_version() == 1,
+            "calibration": self.bridge is not None
+            and all(
+                hasattr(self.bridge, name)
+                for name in (
+                    "ar_calibration_record",
+                    "ar_calibration_reset",
+                    "ar_calibration_cancel",
+                    "ar_calibration_version",
+                )
+            )
+            and self.bridge.ar_calibration_version() == 1,
             "device_controls": self.bridge is not None and hasattr(self.bridge, "ar_set_device_volume"),
             "meters": self.bridge is not None and hasattr(self.bridge, "ar_controls"),
             "device_configuration": self.bridge is not None and hasattr(self.bridge, "ar_set_device_format"),
@@ -218,11 +253,8 @@ class WindowsBackend(AudioBackend):
                 if device.kind == "input" and not device.monitor_of and group in cable_outputs:
                     device.monitor_of = cable_outputs[group][0]
                     device.properties["capture_endpoint_id"] = device.id
-            for device in devices.values():
-                if device.id in self.endpoint_aliases:
-                    device.properties["windows_name"] = device.name
-                    device.name = self.endpoint_aliases[device.id]
             self.devices, self.last_error = devices, ""
+            self._update_cable_controls()
             enumerated = True
             stats_ok = True
             try:
@@ -315,7 +347,22 @@ class WindowsBackend(AudioBackend):
                 or matrices != self.active_matrices.get(source_id)
                 or not self._healthy(source_id, target)
             ):
-                if self.has_matrix_api and any(r.channel_map for r in ordered):
+                if self.capabilities().get("route_controls"):
+                    rows = []
+                    for route in ordered:
+                        values = [str(len(route.channel_map))]
+                        for connection in route.channel_map:
+                            values.extend(str(connection[k]) for k in ("source", "destination", "gain"))
+                        rows.append(" ".join(values))
+                    started = self.bridge.ar_source_start_config(
+                        native_id,
+                        int(capture_input),
+                        "\n".join(target),
+                        "\n".join(map(str, delays)),
+                        "\n".join(rows),
+                        "\n".join(str(0 if r.muted else r.volume) for r in ordered),
+                    )
+                elif self.has_matrix_api and any(r.channel_map for r in ordered):
                     rows = []
                     for route in ordered:
                         values = [str(len(route.channel_map))]
@@ -343,6 +390,42 @@ class WindowsBackend(AudioBackend):
                     self.active_delays[source_id] = delays
                     self.active_matrices[source_id] = matrices
                 self._read_stats()
+            if source_id not in failures and self.capabilities().get("route_controls"):
+                for route, destination in zip(ordered, target):
+                    desired = 0 if route.muted else route.volume
+                    observed = next(
+                        (
+                            d.get("volume")
+                            for d in self._session_stats(source_id).get("devices", [])
+                            if d.get("id") == destination
+                        ),
+                        None,
+                    )
+                    if observed is None or abs(observed - desired) > 0.0001:
+                        if not self.bridge.ar_source_set_volume(
+                            native_id, int(capture_input), destination, desired
+                        ):
+                            failures[source_id] = self._error()
+                            break
+                        self._read_stats()
+                        verified = next(
+                            (
+                                d.get("volume")
+                                for d in self._session_stats(source_id).get("devices", [])
+                                if d.get("id") == destination
+                            ),
+                            None,
+                        )
+                        if verified is None or abs(verified - desired) > 0.0001:
+                            failures[source_id] = "Native stream gain could not be verified"
+                            break
+                if source_id in failures:
+                    if self.bridge.ar_source_start(native_id, int(capture_input), ""):
+                        self.active_sessions.pop(source_id, None)
+                        self.active_delays.pop(source_id, None)
+                        self.active_matrices.pop(source_id, None)
+                    else:
+                        failures[source_id] += "; stopping unverified playback failed: " + self._error()
             healthy = source_id not in failures and self._healthy(source_id, target)
             for route in routes:
                 route.status = "connected" if healthy else "error"
@@ -375,6 +458,131 @@ class WindowsBackend(AudioBackend):
             "VB-CABLE is a shared driver. Use its vendor installer to uninstall it explicitly."
         )
 
+    def reset_calibration(self):
+        self._calibration_cancel.clear()
+        self.bridge.ar_calibration_reset()
+
+    def cancel_calibration(self):
+        # Explicitly lock-free native cancellation; safe from the Qt thread.
+        self._calibration_cancel.set()
+        if self.bridge and hasattr(self.bridge, "ar_calibration_cancel"):
+            self.bridge.ar_calibration_cancel()
+
+    def calibration_cancelled(self):
+        return self._calibration_cancel.is_set()
+
+    def record_calibration(self, microphone_id, output_id, level, channel):
+        if not self.capabilities().get("calibration"):
+            raise BackendError("Native calibration is unavailable")
+        payload = self.bridge.ar_calibration_record(microphone_id, output_id, level, channel)
+        if payload is None:
+            raise BackendError(self._error())
+        try:
+            return json.loads(payload)
+        except (ValueError, TypeError) as exc:
+            raise BackendError("Invalid native recording payload") from exc
+
+    def set_route_volume(self, route_id, volume=None, muted=None):
+        if not self.capabilities().get("route_controls"):
+            raise BackendError("Native stream controls are unavailable; rebuild the DLL")
+        route = self.get_route_status(route_id)
+        gain = route.volume if volume is None else volume
+        mute = route.muted if muted is None else muted
+        if type(gain) not in (int, float) or not 0 <= gain <= 1 or type(mute) is not bool:
+            raise BackendError("Invalid stream volume/mute")
+        if route.enabled and self.transport_running and route.status == "connected":
+            source, capture = self._native_source(route.source_id)
+            dest = self.get_device(route.destination_id).properties.get(
+                "native_endpoint_id", route.destination_id
+            )
+            old = 0 if route.muted else route.volume
+            if not self.bridge.ar_source_set_volume(source, int(capture), dest, 0 if mute else gain):
+                raise BackendError(self._error())
+            try:
+                self._read_stats()
+                observed = next(
+                    (
+                        d.get("volume")
+                        for d in self._session_stats(route.source_id).get("devices", [])
+                        if d.get("id") == dest
+                    ),
+                    None,
+                )
+                if observed is None or abs(observed - (0 if mute else gain)) > 0.0001:
+                    raise BackendError("Stream gain readback failed")
+            except BackendError as exc:
+                rollback = bool(self.bridge.ar_source_set_volume(source, int(capture), dest, old))
+                try:
+                    self._read_stats()
+                    previous = next(
+                        (
+                            d.get("volume")
+                            for d in self._session_stats(route.source_id).get("devices", [])
+                            if d.get("id") == dest
+                        ),
+                        None,
+                    )
+                    rollback = rollback and previous is not None and abs(previous - old) < 0.0001
+                except BackendError:
+                    rollback = False
+                raise BackendError(
+                    f"{exc}; "
+                    + ("previous stream gain restored" if rollback else "stream gain rollback unverified")
+                ) from exc
+        route.volume, route.muted = gain, mute
+        self._update_cable_controls()
+
+    def _cable_routes(self, device):
+        group = device.properties.get("feedback_group")
+        return [
+            r
+            for r in self.routes.values()
+            if self.devices.get(r.source_id)
+            and self.devices[r.source_id].properties.get("feedback_group") == group
+        ]
+
+    def _update_cable_controls(self):
+        for device in self.devices.values():
+            if device.properties.get("virtual_driver") != "VB-CABLE":
+                continue
+            routes = self._cable_routes(device)
+            common = {(r.volume, r.muted) for r in routes}
+            control = device.properties.setdefault("controls", {})
+            control["volume_available"] = (
+                bool(routes) and len(common) == 1 and self.capabilities().get("route_controls", False)
+            )
+            control["scope"] = "A2Router cable routes only"
+            control["reason"] = (
+                "Rebuild the DLL for routed cable gain controls"
+                if not self.capabilities().get("route_controls")
+                else "Add a cable route, or adjust differing gains with Selected route level"
+            )
+            if len(common) == 1:
+                control["volume"], control["muted"] = next(iter(common))
+
+    def _set_cable_controls(self, device, *, volume=None, muted=None):
+        routes = self._cable_routes(device)
+        if not routes:
+            raise BackendError("Add a route from this cable before changing its routed playback")
+        previous = [(r.id, r.volume, r.muted) for r in routes]
+        changed = []
+        try:
+            for route in routes:
+                self.set_route_volume(route.id, volume, muted)
+                changed.append(route.id)
+        except BackendError as exc:
+            errors = []
+            for ident, gain, mute in previous:
+                if ident in changed:
+                    try:
+                        self.set_route_volume(ident, gain, mute)
+                    except BackendError as rollback:
+                        errors.append(str(rollback))
+            raise BackendError(
+                f"Cable gain failed: {exc}"
+                + ("; rollback errors: " + "; ".join(errors) if errors else "; previous gains restored")
+            ) from exc
+
     def poll_controls(self):
         if not self.bridge or not hasattr(self.bridge, "ar_controls"):
             return
@@ -388,11 +596,14 @@ class WindowsBackend(AudioBackend):
             device = self.devices.get(row["id"])
             if device:
                 device.properties["controls"] = {**row["controls"], "observed_at": time.monotonic()}
+        self._update_cable_controls()
 
     def set_device_volume(self, device_id, volume):
         if type(volume) not in (int, float) or not 0 <= volume <= 1:
             raise BackendError("Volume must be between 0 and 1")
-        self.get_device(device_id)
+        device = self.get_device(device_id)
+        if device.properties.get("virtual_driver") == "VB-CABLE":
+            return self._set_cable_controls(device, volume=volume)
         if not self.capabilities()["device_controls"] or not self.bridge.ar_set_device_volume(
             device_id, volume
         ):
@@ -400,9 +611,11 @@ class WindowsBackend(AudioBackend):
         self.poll_controls()
 
     def set_device_mute(self, device_id, muted):
-        self.get_device(device_id)
+        device = self.get_device(device_id)
         if type(muted) is not bool:
             raise BackendError("Mute must be a boolean")
+        if device.properties.get("virtual_driver") == "VB-CABLE":
+            return self._set_cable_controls(device, muted=muted)
         if not self.capabilities()["device_controls"] or not self.bridge.ar_set_device_mute(
             device_id, int(muted)
         ):
@@ -532,9 +745,8 @@ class WindowsBackend(AudioBackend):
             raise BackendError(
                 "VB-CABLE has no active playback endpoint yet. Restart Windows, then click Create again."
             )
-        # A local alias cannot change what other Windows applications display.
-        endpoint = cable[0]
-        self.endpoint_aliases[endpoint.id] = name.strip()
+        # Preserve vendor/Windows names. The legacy argument is validated
+        # for API compatibility, but never renames or adds a local alias.
         self.refresh()
         return (
             "VB-CABLE is available. Windows reports a restart pending."
