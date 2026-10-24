@@ -1,3 +1,4 @@
+include LICENSE LICENSING.md
 include CMakeLists.txt README.md THIRD_PARTY_NOTICES.md build.bat build_gui.bat
 recursive-include src *.cpp *.h
 recursive-include drivers/windows *.md

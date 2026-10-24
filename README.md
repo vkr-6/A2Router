@@ -1,6 +1,6 @@
 # A2Router — Advanced Audio Router
 
-A compact desktop application for routing audio from multiple sources to multiple outputs. The interface uses Python and Qt Widgets; audio transport runs in PipeWire on Linux and the native C++ WASAPI engine on Windows.
+A portable desktop audio router with concurrent multi-output playback, channel mapping, delay compensation and a compact Qt workspace. The interface uses Python and Qt Widgets; audio transport runs in PipeWire on Linux and the native C++ WASAPI engine on Windows.
 
 **Built on [vkr-6/MultiRoute](https://github.com/vkr-6/MultiRoute), originally [FulminataXII/MultiRoute](https://github.com/FulminataXII/MultiRoute). Developed with OpenAI Codex under the project owner's direction.** Original engine authorship and dependency credits are detailed below.
 
@@ -13,7 +13,8 @@ A compact desktop application for routing audio from multiple sources to multipl
 - Windows: reuse MultiRoute's WASAPI engine for input capture and output loopbacks, with native drift compensation and telemetry.
 - Windows uses the original VB-CABLE base package, installed only when you click **Create output** in **Virtual devices**. The application itself remains portable.
 - Optional Windows channel routing: explicit channel remapping, duplication and summing, with per-connection gain and clipping protection in C++. Standard device routes retain the original WASAPI processing path.
-- A redesigned **Audio** main page with a device mixer, measured peak-history graphs, master volume/mute, device filtering and route status. Sidebar navigation keeps routing, virtual endpoints, synchronization and settings separate.
+- Compact top navigation, traditional menus, full-width model/view device tables, filtering, CSV export, a channel-matrix grid, Mixer, diagnostics export and System/Light/Dark themes.
+- Start/Stop retain route definitions and enabled choices; synchronization is embedded in Audio Routing → Routing Configuration. Profile switching replaces routes safely; source CLI behavior remains compatible.
 - Windows virtual endpoint configuration: exact format probing, channel count, bit depth/sample rate, PCM data rate and real Windows endpoint renaming. Advanced controls report failures and verify changes.
 - Live delay adjustment and stable refresh preserve selection, route state and unapplied edits.
 
@@ -21,17 +22,15 @@ A compact desktop application for routing audio from multiple sources to multipl
 
 ## Interface
 
-The **Audio** page is the main workspace. Device cards expose master volume and mute, plus 30 seconds of observed Windows endpoint peaks on a −60 to 0 dBFS graph. Meter polls run on the control worker and do not rebuild or restart routes. Missing telemetry is shown as unavailable; no waveform data is simulated in the real backend. PipeWire volume/mute are supported through `pactl`; live Linux peak capture is not implemented.
+**Audio Routing** opens the routing workspace. The horizontal top strip uses small icons above captions; there is no sidebar. Full-width input/output tables expose actual device specifications and supported volume/mute edits. The four internal tabs are Routing Configuration, Channel Matrix, Advanced Processing and Route Monitor. Synchronization is embedded in Routing Configuration. Mixer retains observed endpoint peak-history graphs; unsupported readings show N/A.
 
-![Audio main page](docs/images/audio.png)
+![Compact routing workspace, light theme](docs/images/studio-light.png)
 
-*Preview captured from the actual Qt application with a labelled simulated backend; no audio hardware validation is implied.*
+![Routing and integrated synchronization, dark theme](docs/images/studio-dark.png)
 
-![Virtual endpoint configuration](docs/images/virtual-devices.png)
+*These are captures of the actual Qt application with an explicitly labelled simulated backend. They do not establish Windows audio hardware compatibility.*
 
-*Configuration preview uses simulated Windows endpoints. The 16-channel choice is a tested UI path, not proof that a particular driver accepted a real change.*
-
-The interface uses compact device strips and clear function separation inspired by established utilities such as [EarTrumpet](https://eartrumpet.app/) and [RME TotalMix FX](https://rme-audio.de/totalmix-fx.html). The layout, assets and implementation are A2Router's own; it has no effects or controls that the backend cannot implement.
+See the [user guide](docs/user-guide.md) for controls, shortcuts, profiles, channel mapping and limitations; [verification](docs/verification.md) for executed tests and the support matrix. Acoustic calibration is deferred to the next upgrade. No tone generator, EQ, compressor, application-specific capture or global hotkeys are presented as working.
 
 ## Build with GitHub Actions
 
@@ -74,7 +73,7 @@ python -m a2router diagnostics
 python -m a2router gui
 ```
 
-Run as your normal desktop user. `pactl info` must connect to the intended audio server. In **Virtual devices**, create a named output and select it in the source application's sound settings. In **Routing**, select that virtual output's monitor and a physical destination. Add another route for another output. Matching channel layouts are required; implicit surround downmixing is rejected. Microphone monitoring requires explicit feedback-risk confirmation.
+Run as your normal desktop user. `pactl info` must connect to the intended audio server. In **Virtual devices**, create a named output and select it in the source application's sound settings. In **Audio Routing**, select that virtual output's monitor and a physical destination. Add another route for another output. Matching channel layouts are required; implicit surround downmixing is rejected. Microphone monitoring requires explicit feedback-risk confirmation.
 
 PipeWire supplies transport, mixing and clock management. Adjustable delay is not currently exposed on Linux. See [Linux details](docs/linux.md).
 
@@ -115,13 +114,13 @@ Keep the `vendor` folder beside the EXEs. Package extraction checks the pinned o
 
 ### Optional channel routing
 
-On Windows, select endpoints in **Routing**, then enable **Custom channel routing** before adding the route. Each row connects one source channel to one destination channel with gain from −60 to +12 dB. Add rows to duplicate a source channel or sum several channels into one destination. Duplicate identical connections are rejected; change their gain instead. Unmapped destinations are silent; omitting source channels requires confirmation in the GUI. Turn the option off for normal whole-device routing.
+On Windows, select endpoints in **Audio Routing**, then enable **Custom channel routing** before adding the route. Each row connects one source channel to one destination channel with gain from −60 to +12 dB. Add rows to duplicate a source channel or sum several channels into one destination. Duplicate identical connections are rejected; change their gain instead. Unmapped destinations are silent; omitting source channels requires confirmation in the GUI. Turn the option off for normal whole-device routing.
 
-The native path accepts reported float32 or PCM16/24/32 sources, accumulates in double precision and emits float32 to WASAPI using the destination's channel layout and the source's sample rate. Windows may convert/resample to the hardware format. Mixed peaks are hard-limited to ±1; clipped samples appear on Synchronization. Lower gains to avoid clipping. These processed routes are not bit-perfect. Channel maps/gains are saved in profiles. Changing route topology restarts that source's native session; live gain editing is not currently exposed. Linux custom matrices are disabled; normal PipeWire device routing is preserved.
+The native path accepts reported float32 or PCM16/24/32 sources, accumulates in double precision and emits float32 to WASAPI using the destination's channel layout and the source's sample rate. Windows may convert/resample to the hardware format. Mixed peaks are hard-limited to ±1; clipped samples appear in the integrated synchronization section. Lower gains to avoid clipping. These processed routes are not bit-perfect. Channel maps/gains are saved in profiles. Changing route topology restarts that source's native session; map/gain edits to existing routes require explicit application and can restart that source. Linux custom matrices are disabled; normal PipeWire device routing is preserved.
 
 ### Synchronization and stable refresh
 
-Select a route on **Synchronization**, edit the additional delay, then Apply. Draft values survive focus changes and periodic refreshes; Discard restores the saved request. Native live-delay adjustment is used within the current buffer. A larger adjustment can restart that source only if **Allow a source restart** is selected. The page shows route state, requested delay, actual buffer/target, rate correction and underruns. Existing native drift compensation remains automatic; acoustic alignment still requires measurement.
+Open **Audio Routing → Routing Configuration → Synchronization & Delay Compensation**, select a route, edit the additional delay, then Apply. Draft values survive focus changes and periodic refreshes; Discard restores the saved request. Native live-delay adjustment is used within the current buffer. A larger adjustment can restart that source only if **Allow a source restart** is selected. The page shows route state, requested delay, actual buffer/target, rate correction and underruns. Existing native drift compensation remains automatic; acoustic alignment still requires measurement.
 
 Periodic refresh updates changed cells in place, preserving selections and scroll positions. It does not rebuild lists, flash the Updating message or disable controls. A click made while polling is queued instead of discarded. Polling does not restart healthy routes.
 
@@ -146,7 +145,7 @@ python -m a2router load studio.json
 
 The distributed portable build contains only `a2router.exe`; no separate CLI or native console artifacts are shipped. The following source diagnostics remain available to developers. Use device IDs returned by `devices`. Read-only diagnostics do not activate saved routes. `python -m a2router --mock gui` uses a clearly labelled simulation and separate state. Windows CLI processes cannot sustain routing after exit; use the GUI.
 
-Closing the window hides/minimizes it. **Exit controller** leaves Linux server resources running but stops Windows processing. **Stop all managed routes** explicitly disables routes. Configuration restoration creates managed virtual devices before dependent routes; missing endpoints remain pending. Default speakers/microphones are not explicitly changed by the application.
+Closing the window hides/minimizes it. **Exit controller** leaves Linux server resources running but stops Windows processing. **Stop Routing** stops transport while retaining enabled choices; the source CLI `stop` retains its existing disabling behavior. Configuration restoration creates managed virtual devices before dependent routes; missing endpoints remain pending. Default speakers/microphones are not explicitly changed by the application.
 
 ## Development checks
 
@@ -191,4 +190,4 @@ THIRD_PARTY_NOTICES.md  Upstream attribution and dependency notices
 - **[VB-Audio Software](https://www.vb-cable.com/)** — VB-CABLE virtual audio driver by Vincent Burel / JS-Loezic. The original Pack45 ZIP and vendor license are preserved unchanged. VB-CABLE is donationware; contributions are welcome.
 - **OpenAI Codex** — AI coding assistant used to develop the A2Router application additions, Linux backend, Qt interface, configuration handling, Windows integration, driver adaptation, documentation and workflows under the project owner's direction. This development credit does not replace upstream authorship or imply verified correctness.
 
-No standalone license file was present in the imported MultiRoute checkout. A2Router does not assign a new blanket license to that existing engine. VB-CABLE retains its own proprietary donationware license; it is not A2Router-authored code. See [third-party notices](THIRD_PARTY_NOTICES.md) for attribution and component licensing. Original [MultiRoute documentation](docs/upstream-windows.md) is retained.
+Original A2Router contributions are available under the [MIT license](LICENSE). See [license scope](LICENSING.md): the imported MultiRoute engine has no license in this snapshot and is excluded from this grant. VB-CABLE retains its own proprietary donationware license; it is not A2Router-authored code. See [third-party notices](THIRD_PARTY_NOTICES.md) for attribution and component licensing. Original [MultiRoute documentation](docs/upstream-windows.md) is retained.

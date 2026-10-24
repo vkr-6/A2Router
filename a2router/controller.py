@@ -117,6 +117,56 @@ class Controller:
     def load(self, path, activate=True):
         return self.restore(storage.load(path), activate=activate)
 
+    def pause_routes(self):
+        """Stop managed transport without changing profile enabled states."""
+        self.backend.transport_running = False
+        errors = []
+        for route in self.backend.list_routes():
+            try:
+                self.backend._disconnect(route)
+                route.status = "stopped" if route.enabled else "disabled"
+            except BackendError as exc:
+                route.status, route.error = "error", str(exc)
+                errors.append(str(exc))
+        if errors:
+            raise BackendError("; ".join(errors))
+
+    def resume_routes(self):
+        self.backend.transport_running = True
+        self.refresh()
+        errors = [r.error for r in self.backend.list_routes() if r.enabled and r.error]
+        if errors:
+            raise BackendError("; ".join(errors))
+
+    def replace_profile(self, data):
+        """Validate first; retain unrelated virtual devices and roll back routes on failure.
+
+        Unavailable endpoints remain pending. This does not uninstall a shared driver
+        or delete server virtual sinks omitted by the new profile.
+        """
+        from copy import deepcopy
+
+        storage.validate(data)
+        previous = deepcopy(self.snapshot())
+        was_running = self.backend.transport_running
+        self.pause_routes()
+        self.backend.routes.clear()
+        try:
+            self.backend.endpoint_aliases = dict(data.get("endpoint_aliases", {}))
+            errors = self.restore(data, activate=was_running)
+            if was_running:
+                self.backend.transport_running = True
+                self.refresh()
+            return errors
+        except Exception:
+            self.backend.routes.clear()
+            self.backend.endpoint_aliases = dict(previous.get("endpoint_aliases", {}))
+            self.restore(previous, activate=False)
+            self.backend.transport_running = was_running
+            if was_running:
+                self.refresh()
+            raise
+
     def start_routes(self):
         for route in self.backend.list_routes():
             self.backend.enable_route(route.id)

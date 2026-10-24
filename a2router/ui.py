@@ -14,15 +14,12 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
-    QFileDialog,
     QFormLayout,
-    QFrame,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
-    QListWidget,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -38,9 +35,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from a2router.controller import config_dir
 from a2router.dashboard import Dashboard
-from a2router.models import VirtualDevice
+from a2router.models import BackendError, VirtualDevice
 
 
 class Results(QObject):
@@ -68,52 +64,21 @@ class MainWindow(QMainWindow):
         self._vbcable_page = self.backend.capabilities().get("virtual_device_provider") == "VB-CABLE"
         self.setWindowTitle("A2Router — Advanced Audio Router")
         self.setWindowIcon(QIcon(str(Path(__file__).parent / "assets/a2router.svg")))
-        self.resize(1200, 820)
-        self.setMinimumSize(980, 680)
-        self.setStyleSheet((Path(__file__).parent / "assets/style.qss").read_text())
+        self.resize(1280, 720)
+        self.setMinimumSize(1000, 620)
         self.buttons = []
         self.tabs = QStackedWidget()
+        from a2router.studio import Navigation
+
+        self.navigation = Navigation()
         root = QWidget()
-        shell = QHBoxLayout(root)
-        shell.setContentsMargins(0, 0, 0, 0)
-        shell.setSpacing(0)
-        sidebar = QFrame()
-        sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(208)
-        side = QVBoxLayout(sidebar)
-        side.setContentsMargins(16, 25, 16, 18)
-        logo = QLabel()
-        logo.setPixmap(self.windowIcon().pixmap(44, 44))
-        side.addWidget(logo)
-        brand = QLabel("A2Router")
-        brand.setObjectName("Brand")
-        side.addWidget(brand)
-        caption = QLabel("Advanced Audio Router")
-        caption.setObjectName("MutedText")
-        side.addWidget(caption)
-        side.addSpacing(25)
-        self.navigation = QListWidget()
-        self.navigation.setObjectName("Navigation")
-        side.addWidget(self.navigation, 1)
-        backend_label = QLabel(self.backend.name)
-        backend_label.setObjectName("MutedText")
-        backend_label.setWordWrap(True)
-        side.addWidget(backend_label)
-        exit_button = QPushButton("Exit A2Router")
-        exit_button.clicked.connect(self.exit_application)
-        side.addWidget(exit_button)
-        shell.addWidget(sidebar)
-        body = QVBoxLayout()
-        body.setContentsMargins(26, 22, 26, 12)
-        body.setSpacing(16)
-        heading = QHBoxLayout()
-        self.header_title = QLabel("Audio")
-        self.header_title.setObjectName("PageTitle")
-        heading.addWidget(self.header_title, 1)
-        self.button(heading, "Refresh", lambda: self.refresh(manual=True))
-        body.addLayout(heading)
-        body.addWidget(self.tabs, 1)
-        shell.addLayout(body, 1)
+        shell = QVBoxLayout(root)
+        shell.setContentsMargins(6, 0, 6, 4)
+        shell.setSpacing(4)
+        shell.addWidget(self.navigation)
+        self.header_title = QLabel("Audio Routing")
+        shell.addWidget(self.header_title)
+        shell.addWidget(self.tabs, 1)
         self.setCentralWidget(root)
         self.error = QLabel()
         self.error.setWordWrap(True)
@@ -124,12 +89,15 @@ class MainWindow(QMainWindow):
         self._virtual_page()
         self._status_page()
         self._settings_page()
+        from a2router.studio import Studio
+
+        self.studio = Studio(self)
         self.navigation.currentRowChanged.connect(self.tabs.setCurrentIndex)
         self.navigation.currentRowChanged.connect(
             lambda row: self.header_title.setText(self.navigation.item(row).text()) if row >= 0 else None
         )
         self.navigation.setCurrentRow(0)
-        # Window navigation has no menu bar; tray lifecycle controls remain available.
+        # Tray lifecycle controls remain available independently of workspace menus.
         menu = QMenu(self)
         show = QAction("Show A2Router", self)
         show.triggered.connect(self.showNormal)
@@ -175,7 +143,7 @@ class MainWindow(QMainWindow):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(6)
         self.tabs.addWidget(widget)
         self.navigation.addItem(title)
         return layout
@@ -211,13 +179,13 @@ class MainWindow(QMainWindow):
         self.button(
             actions,
             "Start routes",
-            lambda: self.submit(self.controller.start_routes),
+            lambda: self.submit(self.controller.resume_routes),
             self.backend.capabilities()["routing"],
         )
         self.button(
             actions,
             "Stop routes",
-            lambda: self.submit(self.controller.stop_routes),
+            lambda: self.submit(self.controller.pause_routes),
             self.backend.capabilities()["routing"],
         )
         actions.addStretch()
@@ -233,7 +201,7 @@ class MainWindow(QMainWindow):
         )
 
     def poll_meters(self):
-        if not self.busy and self.tabs.currentIndex() == 0 and self.backend.capabilities().get("meters"):
+        if not self.busy and self.tabs.currentIndex() in (0, 1) and self.backend.capabilities().get("meters"):
             self.submit(self.backend.poll_controls, persist=False, background=True, refresh_backend=False)
 
     def _devices_page(self):
@@ -417,17 +385,37 @@ class MainWindow(QMainWindow):
         gain.setSingleStep(0.5)
         gain.setSuffix(" dB")
         self.channel_table.setCellWidget(row, 2, gain)
+        for column in range(3):
+            widget = self.channel_table.cellWidget(row, column)
+            signal = widget.valueChanged if column == 2 else widget.currentIndexChanged
+            signal.connect(self._matrix_changed)
+        self._matrix_changed()
+
+    def _matrix_changed(self, *_):
+        if hasattr(self, "studio"):
+            self.studio.matrix.refresh()
 
     def remove_channel_connection(self):
         rows = sorted({index.row() for index in self.channel_table.selectedIndexes()}, reverse=True)
         for row in rows:
             self.channel_table.removeRow(row)
+        self._matrix_changed()
 
     def route_action(self, method):
         selected = self.route_tree.selectedItems()
         if selected:
-            ident = selected[0].data(0, Qt.UserRole)
-            self.submit(lambda: getattr(self.backend, method)(ident))
+            identifiers = [item.data(0, Qt.UserRole) for item in selected]
+
+            def apply():
+                errors = []
+                for ident in identifiers:
+                    try:
+                        getattr(self.backend, method)(ident)
+                    except BackendError as exc:
+                        errors.append(str(exc))
+                return errors
+
+            self.submit(apply)
 
     def _virtual_page(self):
         layout = self.page("Virtual devices")
@@ -540,10 +528,7 @@ class MainWindow(QMainWindow):
         )
         if not capable:
             layout.addWidget(
-                QLabel(
-                    "Windows: build the native helper and signed A2Router driver package first. "
-                    "See drivers/windows/README.md; creating/removing a device requests UAC approval."
-                )
+                QLabel("Virtual-device creation is unavailable with this backend. See backend diagnostics.")
             )
 
     def _cable_selection_changed(self):
@@ -797,18 +782,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(hint)
 
     def save_profile(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save routing profile", str(config_dir() / "profile.json"), "JSON (*.json)"
-        )
-        if path:
-            self.submit(lambda: self.controller.save(path))
+        self.studio.save(True)
 
     def load_profile(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Load routing profile", str(config_dir()), "JSON (*.json)"
-        )
-        if path:
-            self.submit(lambda: self.controller.load(path))
+        self.studio.open_profile()
 
     def refresh(self, manual=False):
         self.submit(lambda: None, persist=False, background=not manual)
@@ -869,6 +846,7 @@ class MainWindow(QMainWindow):
         if snapshot:
             self.populate(snapshot)
         backend_error = (snapshot or {}).get("diagnostics", {}).get("error")
+        self.studio.record(message or backend_error)
         if not background:
             self.error.setText(message or backend_error or self.backend.name)
             self._poll_error = ""
@@ -1119,6 +1097,7 @@ class MainWindow(QMainWindow):
             virtual_rows.append((config["id"], [config["name"], config["layout"], state, ident]))
         self._update_tree(self.virtual_tree, virtual_rows)
         self._update_text(self.diagnostics, json.dumps(snapshot["diagnostics"], indent=2))
+        self.studio.update(snapshot)
 
     def closeEvent(self, event):
         if self.exit_ready:
@@ -1134,6 +1113,7 @@ class MainWindow(QMainWindow):
             event.ignore()
 
     def exit_application(self):
+        self.studio.persist_layout()
         self.timer.stop()
         self.meter_timer.stop()
         for card in self.dashboard.cards.values():

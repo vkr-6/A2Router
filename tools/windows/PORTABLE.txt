@@ -4,9 +4,10 @@ Extract the complete folder and launch a2router.exe. This is the only A2Router
 application executable; the vendor folder retains original VB-Audio utilities. Python, Qt and the native WASAPI bridge are bundled.
 There is no separate console version and no app installer.
 
-Audio is the main page: measured Windows endpoint peaks, master volume/mute,
-filters and route status. Missing meter data is shown as unavailable.
-Other pages are available from the side navigation.
+Audio Routing is the main workspace. Use the compact top navigation and menus.
+Routing Configuration contains synchronization; Mixer has observed endpoint peaks
+and master volume/mute. Unsupported readings show N/A. Stop Routing preserves
+enabled route choices. Emergency Mute requests the same serialized transport stop.
 
 Virtual devices lists an existing VB-CABLE without reinstalling it. Add VB-CABLE
 installs the original vendor driver only when explicitly clicked. Administrator
@@ -29,7 +30,7 @@ Exit and delete the portable folder to remove A2Router itself.
 
 Optional channel routing provides remapping, duplication, summing and gain.
 Unmapped outputs are silent; source omissions require confirmation. Mixed peaks
-are clipped to +/-1. Synchronization shows native buffering/drift metrics and
+are clipped to +/-1. The integrated delay section shows native buffering/drift metrics and
 supported delay controls. No bit-perfect or measured acoustic-sync claim.
 
 Settings: %APPDATA%\a2router. Closing hides/minimizes; Exit stops Windows routing.
@@ -38,3 +39,6 @@ Donations/licensing: https://vb-audio.com/Services/licensing.htm
 Original vendor files/license are unchanged. No additional A/B/C/D drivers.
 Credits: vkr-6/MultiRoute, originally FulminataXII/MultiRoute; VB-Audio Software;
 OpenAI Codex under the owner's direction. See THIRD_PARTY_NOTICES.md and licenses/.
+
+Original A2Router contributions: MIT; see LICENSE and LICENSING.md for exclusions.
+Imported MultiRoute code and VB-CABLE are separately governed.

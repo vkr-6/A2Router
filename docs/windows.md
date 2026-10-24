@@ -28,6 +28,8 @@ The per-output FIFO and drift controllers retain source-format units, including 
 
 Linux Qt tests, native matrix sample tests and Windows control/PowerShell simulations were run for this revision. Windows testing used existing Python/PowerShell with tests shared from Linux: no Windows packages, tools or drivers were installed. No Windows compiler was available, so the updated bridge/portable EXE must be built by the manual workflow and tested on a suitable Windows target. Driver install/removal and audible playback were not exercised.
 
-## Main Audio page
+## Mixer and routing workspace
 
 Native `IAudioEndpointVolume` provides master volume/mute and `IAudioMeterInformation` provides observed peaks for physical inputs, outputs and actual cable capture/playback endpoints. Generated loopback aliases are excluded from duplicate mixer controls. Fast meter polling is serialized off the GUI thread and only runs while Audio is visible. Charts retain stable device identity, avoid interpolating across gaps and show unavailable data explicitly. Volume control does not restart source sessions.
+
+The top navigation and manual synchronization workflow are documented in [the user guide](user-guide.md). Rename verification now reacquires endpoint/property-store instances; write/commit access-denied HRESULTs reach the explicit elevation flow. A rejected unchanged write does not attempt rollback. This change still requires a target-machine Windows DLL build and rename check.

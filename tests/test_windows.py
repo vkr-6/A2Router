@@ -238,3 +238,21 @@ def test_vbcable_capture_and_feedback_share_one_cable():
         backend.create_virtual_device({"name": "Not another cable"})
     with pytest.raises(BackendError, match="shared driver"):
         backend.remove_virtual_device("cable-in")
+
+
+def test_paused_windows_transport_retains_enabled_states_after_refresh():
+    from a2router.controller import Controller
+
+    bridge = Bridge()
+    backend = WindowsBackend(bridge)
+    backend.refresh()
+    active = backend.create_route("wasapi-loopback:default", "headphones")
+    disabled = backend.create_route("mic", "hdmi", enabled=False, monitoring_confirmed=True)
+    controller = Controller(backend)
+    controller.pause_routes()
+    backend.refresh()
+    assert active.enabled and active.status == "stopped"
+    assert not disabled.enabled and not bridge.sessions
+    controller.resume_routes()
+    assert active.status == "connected" and disabled.status == "disabled"
+    assert len(bridge.sessions) == 1

@@ -276,8 +276,8 @@ class WindowsBackend(AudioBackend):
         groups = {}
         for route in self.routes.values():
             route.resource_ids = []
-            if not route.enabled:
-                route.status, route.error = "disabled", ""
+            if not route.enabled or not self.transport_running:
+                route.status, route.error = ("disabled" if not route.enabled else "stopped"), ""
                 continue
             try:
                 self._validate_route(route)
@@ -456,7 +456,11 @@ class WindowsBackend(AudioBackend):
         group = self.get_device(device_id).properties.get("feedback_group")
         dependent = False
         for route in self.routes.values():
-            if not route.enabled:
+            if not route.enabled or (
+                not self.transport_running
+                and not route.resource_ids
+                and route.source_id not in self.active_sessions
+            ):
                 continue
             source = self.devices.get(route.source_id)
             destination = self.devices.get(route.destination_id)
@@ -568,6 +572,9 @@ class WindowsBackend(AudioBackend):
             raise BackendError("Additional delay must be between 0 and 10000 ms")
         route = self.get_route_status(route_id)
         old_delay = route.delay_ms
+        if not route.enabled or not self.transport_running:
+            route.delay_ms = delay_ms
+            return
         if route.enabled:
             self._validate_route(route)
         if route.enabled and self.has_live_delay_api and route.status == "connected":

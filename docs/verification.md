@@ -1,6 +1,12 @@
-# Audio console / native endpoint controls revision
+# Current workspace verification
 
-Executed checks for the current source revision:
+See [the upgrade report](upgrade-report.md) for the current revision: Linux Python/Qt **108 passed, 13 skipped**, selected Windows control/helper tests **74 passed**, native CTest **1/1 passed**, Ruff and PowerShell syntax checks passed. Windows native build/hardware validation remains pending. Calibration is deferred. Nothing was installed on Windows.
+
+The following results are preserved as historical records; they do not supersede the current report.
+
+# Historical audio console / native endpoint controls revision
+
+Historical checks before the workspace upgrade:
 
 - Linux Python/Qt offscreen: **91 passed, 13 skipped**. Tests cover standard routing, 16-channel configuration UI, adapter classification, system rename wiring, real-data graph handling, sound controls, filtering, profiles, cable feedback and on-demand-install simulations.
 - Existing Windows Python 3.12 / PowerShell, using test dependencies shared from Linux: **72 passed** in the selected core, Windows control, device-configuration, matrix, vendor and driver-helper suites. Installer commands were mocked. Nothing was installed on Windows.

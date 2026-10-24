@@ -13,7 +13,7 @@ foreach ($folder in @('a2router', 'src', 'tests', 'tools', 'vendor')) {
     & robocopy "$source\$folder" "$Workspace\$folder" /E /R:2 /W:1 /XD __pycache__ .pytest_cache .ruff_cache /NFL /NDL /NJH /NJS
     if ($LASTEXITCODE -ge 8) { throw "Copy failed: $folder" }
 }
-foreach ($file in @('CMakeLists.txt','pyproject.toml','README.md','THIRD_PARTY_NOTICES.md')) { Copy-Item "$source\$file" "$Workspace\$file" -Force }
+foreach ($file in @('CMakeLists.txt','pyproject.toml','README.md','THIRD_PARTY_NOTICES.md','LICENSE','LICENSING.md')) { Copy-Item "$source\$file" "$Workspace\$file" -Force }
 $python = "$Workspace\venv\Scripts\python.exe"
 if (!(Test-Path $python)) {
     & py -3.12 -m venv "$Workspace\venv"
@@ -117,6 +117,8 @@ Copy-Item "$source\tools\windows\install-vbcable.ps1" "$Workspace\dist\vendor\in
 if ($LASTEXITCODE) { throw 'Runtime license collection failed' }
 Copy-Item "$source\tools\windows\PORTABLE.txt" "$Workspace\dist\README.txt" -Force
 Copy-Item "$source\THIRD_PARTY_NOTICES.md" "$Workspace\dist\THIRD_PARTY_NOTICES.md" -Force
+Copy-Item "$source\LICENSE" "$Workspace\dist\LICENSE" -Force
+Copy-Item "$source\LICENSING.md" "$Workspace\dist\LICENSING.md" -Force
 $out = "$source\dist\windows-x64"
 if (Test-Path $out) { Remove-Item $out -Recurse -Force }
 New-Item -ItemType Directory -Force $out | Out-Null

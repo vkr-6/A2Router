@@ -174,3 +174,21 @@ def test_shared_cable_route_blocks_alternative_pin_reconfiguration():
     backend.create_route("cable-out", "headphones")
     with pytest.raises(BackendError, match="Stop routes"):
         backend.configure_device_format("cable-16", FORMATS[-1])
+
+
+def test_gui_stop_allows_format_change_without_restarting_desired_route():
+    from a2router.controller import Controller
+
+    bridge = ConfigurationBridge()
+    backend = WindowsBackend(bridge)
+    backend.refresh()
+    route = backend.create_route("cable-out", "headphones")
+    controller = Controller(backend)
+    controller.pause_routes()
+    controller.refresh()
+    assert route.enabled and route.status == "stopped"
+    assert not backend.active_sessions
+    backend.inspect_formats("cable-out")
+    backend.configure_device_format("cable-out", FORMATS[-1])
+    assert backend.get_device("cable-out").channels == 16
+    assert route.enabled and not backend.active_sessions

@@ -1,5 +1,7 @@
 # Third-party acknowledgements
 
+Original A2Router contributions use the root [MIT license](LICENSE); see [LICENSING.md](LICENSING.md) for exact exclusions.
+
 ## MultiRoute audio engine
 
 A2Router reuses and extends the Windows WASAPI engine from:

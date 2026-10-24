@@ -25,7 +25,7 @@ class PeakGraph(QWidget):
         super().__init__(parent)
         self.samples = deque(maxlen=160)
         self.available = False
-        self.setMinimumHeight(72)
+        self.setMinimumHeight(45)
         self.setAccessibleName("Observed endpoint peak history")
         self.setToolTip("Observed endpoint peaks over 30 seconds, from −60 to 0 dBFS.")
 
@@ -89,7 +89,7 @@ class DeviceCard(QFrame):
         self.volume_timer.setInterval(180)
         self.volume_timer.timeout.connect(lambda: on_volume(device_id, self.volume.value() / 100))
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setContentsMargins(8, 6, 8, 6)
         header = QHBoxLayout()
         self.name = QLabel()
         self.name.setObjectName("CardTitle")
@@ -217,7 +217,7 @@ class Dashboard(QWidget):
         content = QWidget()
         self.grid = QGridLayout(content)
         self.grid.setContentsMargins(0, 0, 6, 0)
-        self.grid.setSpacing(14)
+        self.grid.setSpacing(6)
         self.grid.setColumnStretch(0, 1)
         self.grid.setColumnStretch(1, 1)
         self.grid.setRowStretch(1000, 1)

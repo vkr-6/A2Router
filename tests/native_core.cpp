@@ -2,6 +2,7 @@
 #include "ClockDriftController.h"
 #include "Logging.h"
 #include "ChannelMatrix.h"
+#include "EndpointRename.h"
 #include <limits>
 #include <cmath>
 #include <array>
@@ -12,6 +13,29 @@
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 int main() {
     try {
+        // A rejected property write must not trigger a second, equally denied
+        // rollback write or obscure the original access-denied HRESULT.
+        std::wstring name = L"Original";
+        int writes = 0;
+        auto readName = [&]() -> std::optional<std::wstring> { return name; };
+        auto denied = a2r::renameVerified(L"New", readName,
+            [&](const std::wstring&) -> long { ++writes; return -5; }, [] {});
+        require(denied.state == a2r::RenameState::Rejected && denied.result == -5 && writes == 1,
+            "rename denial must preserve original and avoid rollback write");
+        int reads = 0;
+        auto delayed = a2r::renameVerified(L"New",
+            [&]() -> std::optional<std::wstring> { return ++reads >= 4 ? L"New" : L"Original"; },
+            [&](const std::wstring&) -> long { ++writes; return 0; }, [] {});
+        require(delayed.state == a2r::RenameState::Verified && writes == 2,
+            "rename must tolerate delayed fresh-store observation");
+        auto unreadable = a2r::renameVerified(L"New", []() -> std::optional<std::wstring> { return {}; },
+            [&](const std::wstring&) -> long { ++writes; return 0; }, [] {});
+        require(unreadable.state == a2r::RenameState::ReadFailed && writes == 2,
+            "do not write when previous name is unreadable");
+        name = L"Original";
+        auto rollback = a2r::renameVerified(L"New", readName,
+            [&](const std::wstring& value) -> long { name = value == L"New" ? L"Unexpected" : value; return 0; }, [] {});
+        require(rollback.state == a2r::RenameState::Restored && name == L"Original", "rename rollback verification");
         const mux::PcmEncoding floats{2, 32, 32, true};
         const std::array<float, 4> samples{0.25f, -0.5f, 0.75f, 0.5f};
         std::array<float, 6> mapped{};

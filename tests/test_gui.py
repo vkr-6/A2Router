@@ -111,6 +111,7 @@ def test_sync_draft_survives_focus_loss_and_poll(app, tmp_path):
     try:
         wait(app, window)
         window.sync_route.setCurrentIndex(window.sync_route.findData(route.id))
+        window.studio.open_delay()
         window.sync_delay.setValue(225)
         window.source.setFocus()
         window.refresh()
@@ -279,9 +280,17 @@ def test_dashboard_master_controls_and_missing_peak_are_honest(app):
     window = MainWindow(Controller(backend))
     try:
         wait(app, window)
-        assert window.navigation.item(0).text() == "Audio"
-        assert window.header_title.text() == "Audio"
-        assert not window.menuBar().actions()
+        assert window.navigation.item(0).text() == "Audio Routing"
+        assert window.header_title.text() == "Audio Routing"
+        assert [action.text() for action in window.menuBar().actions()] == [
+            "File",
+            "Edit",
+            "View",
+            "Routing",
+            "Devices",
+            "Tools",
+            "Help",
+        ]
         card = window.dashboard.cards["speakers"]
         assert len(window.dashboard.cards) == 3
         assert not card.graph.samples

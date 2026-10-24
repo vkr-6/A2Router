@@ -13,6 +13,7 @@ class AudioBackend:
         self.routes = {}
         self.virtual_devices = {}
         self.last_error = ""
+        self.transport_running = True
         self.endpoint_aliases = {}
 
     def capabilities(self):
@@ -141,8 +142,10 @@ class AudioBackend:
         return route
 
     def _reconcile_route(self, route):
-        if not route.enabled:
-            route.status = "disabled"
+        if not route.enabled or not self.transport_running:
+            if not self.transport_running:
+                self._disconnect(route)
+            route.status = "disabled" if not route.enabled else "stopped"
             route.error = ""
             return
         try:
@@ -161,6 +164,24 @@ class AudioBackend:
                 "pending"
                 if (route.source_id not in self.devices or route.destination_id not in self.devices)
                 else "error"
+            )
+
+    def set_route_channel_map(self, route_id, mapping):
+        from dataclasses import replace
+
+        route = self.get_route_status(route_id)
+        candidate = replace(route, channel_map=deepcopy(mapping))
+        self._validate_route(candidate)
+        previous = route.channel_map
+        route.channel_map = candidate.channel_map
+        self._reconcile_route(route)
+        if route.status == "error":
+            reason = route.error
+            route.channel_map = previous
+            self._reconcile_route(route)
+            raise BackendError(
+                f"Map rejected: {reason}; previous mapping restored"
+                + (f"; recovery failed: {route.error}" if route.status == "error" else "")
             )
 
     def enable_route(self, route_id):

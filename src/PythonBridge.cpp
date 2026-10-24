@@ -21,6 +21,7 @@
 #include <sstream>
 #include <thread>
 #include "WindowsEndpointControl.h"
+#include "EndpointRename.h"
 
 using Microsoft::WRL::ComPtr;
 namespace {
@@ -475,28 +476,50 @@ API int ar_set_device_format(const wchar_t* id, int channels, int rate, int bits
 }
 API int ar_rename_device(const wchar_t* id, const wchar_t* name) {
     std::lock_guard<std::mutex> lock(apiMutex);
-    if (!name || !*name || wcslen(name) > 128) { error = "Invalid endpoint name"; return 0; }
+    if (!id || !*id || !name || !*name || wcslen(name) > 128) { error = "Invalid endpoint name or ID"; return 0; }
+    for (const wchar_t* c = name; *c; ++c) {
+        if (*c < 32) { error = "Endpoint name contains control characters"; return 0; }
+    }
     ComScope scope;
-    ComPtr<IMMDevice> device;
-    if (scope.usable()) device = a2r::endpoint(id);
-    ComPtr<IPropertyStore> properties;
-    if (!device || FAILED(device->OpenPropertyStore(STGM_READWRITE, &properties))) {
-        error = "Windows requires administrator access to rename this endpoint"; return 0;
+    if (!scope.usable()) { error = "COM initialization failed while renaming endpoint"; return 0; }
+    auto read = [&]() -> std::optional<std::wstring> {
+        auto device = a2r::endpoint(id);
+        ComPtr<IPropertyStore> properties;
+        if (!device || FAILED(device->OpenPropertyStore(STGM_READ, &properties))) return {};
+        PROPVARIANT value; PropVariantInit(&value);
+        std::optional<std::wstring> observed;
+        if (SUCCEEDED(properties->GetValue(PKEY_Device_FriendlyName, &value)) && value.vt == VT_LPWSTR && value.pwszVal)
+            observed = value.pwszVal;
+        PropVariantClear(&value);
+        return observed;
+    };
+    const auto outcome = a2r::renameVerified(std::wstring(name), read, [&](const std::wstring& value) -> long {
+        auto device = a2r::endpoint(id);
+        if (!device) return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+        ComPtr<IPropertyStore> properties;
+        HRESULT hr = device->OpenPropertyStore(STGM_READWRITE, &properties);
+        if (FAILED(hr)) return hr;
+        PROPVARIANT property; PropVariantInit(&property);
+        property.vt = VT_LPWSTR; property.pwszVal = const_cast<wchar_t*>(value.c_str());
+        hr = properties->SetValue(PKEY_Device_FriendlyName, property);
+        if (SUCCEEDED(hr)) hr = properties->Commit();
+        // Release the writable store before opening a new read snapshot.
+        return hr;
+    }, [] { std::this_thread::sleep_for(std::chrono::milliseconds(100)); });
+    if (outcome.state == a2r::RenameState::Verified) { error.clear(); return 1; }
+    const HRESULT hr = static_cast<HRESULT>(outcome.result);
+    if (hr == E_ACCESSDENIED || hr == STG_E_ACCESSDENIED || hr == HRESULT_FROM_WIN32(ERROR_PRIVILEGE_NOT_HELD)) {
+        error = "Windows requires administrator access to rename this endpoint";
+    } else {
+        std::ostringstream message;
+        switch (outcome.state) {
+        case a2r::RenameState::ReadFailed: message << "Cannot read endpoint name; device may have disconnected"; break;
+        case a2r::RenameState::Rejected: message << "Windows rejected the endpoint name; previous name is unchanged"; break;
+        case a2r::RenameState::Restored: message << "Endpoint rename was not verified; previous name restored"; break;
+        default: message << "Endpoint name could not be verified; refresh and inspect Windows Sound"; break;
+        }
+        message << " (HRESULT 0x" << std::hex << static_cast<unsigned long>(hr) << ")";
+        error = message.str();
     }
-    const auto previous = friendlyName(device.Get());
-    PROPVARIANT value; PropVariantInit(&value); value.vt = VT_LPWSTR; value.pwszVal = const_cast<wchar_t*>(name);
-    if (FAILED(properties->SetValue(PKEY_Device_FriendlyName, value)) || FAILED(properties->Commit())) {
-        value.pwszVal = const_cast<wchar_t*>(previous.c_str());
-        const bool restored = SUCCEEDED(properties->SetValue(PKEY_Device_FriendlyName, value)) &&
-                              SUCCEEDED(properties->Commit()) && friendlyName(device.Get()) == previous;
-        error = restored ? "Windows rejected the endpoint name; previous name retained" : "Endpoint rename failed; previous name could not be verified";
-        return 0;
-    }
-    if (friendlyName(device.Get()) != name) {
-        value.pwszVal = const_cast<wchar_t*>(previous.c_str());
-        const bool restored = SUCCEEDED(properties->SetValue(PKEY_Device_FriendlyName, value)) && SUCCEEDED(properties->Commit());
-        error = restored ? "Endpoint rename was not verified; previous name restored" : "Endpoint rename was not verified and rollback failed";
-        return 0;
-    }
-    error.clear(); return 1;
+    return 0;
 }
