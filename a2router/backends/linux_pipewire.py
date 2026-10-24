@@ -259,12 +259,35 @@ class PipeWireBackend(AudioBackend):
         # support. Nest escaped double quotes explicitly instead.
         return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
+    def _legacy_property_parser(self):
+        match = re.search(r"PipeWire (\d+)\.(\d+)\.(\d+)", self.server.get("server_name", ""))
+        return bool(match and tuple(map(int, match.groups())) <= (0, 3, 48))
+
+    @staticmethod
+    def _legacy_description(name):
+        # 0.3.48 skips escaped characters but keeps the backslashes verbatim.
+        # Use one quoting level, with a delimiter absent from the actual name.
+        if "\\" not in name:
+            for delimiter in ('"', "'"):
+                if delimiter not in name:
+                    return delimiter + name + delimiter
+        raise BackendError(
+            "PipeWire 0.3.48 cannot preserve names containing both quote types or backslashes; "
+            "use a simpler name or upgrade PipeWire"
+        )
+
     def _create_virtual(self, config):
         UUID(config.id)
         sink_name = config.device_id.removeprefix("sink:")
         # libpulse proplist quoting is separate from shell quoting; no shell is used.
         quoted = '"' + config.name.replace("\\", "\\\\").replace('"', '\\"') + '"'
         properties = f"device.description={quoted} a2router.owner={self.owner} a2router.virtual={config.id}"
+        description_args = []
+        if self._legacy_property_parser():
+            # Older PipeWire preserves arbitrary top-level properties, so avoid
+            # its broken second parse of a nested quoted description.
+            description_args = ["device.description=" + self._legacy_description(config.name)]
+            properties = f"a2router.owner={self.owner} a2router.virtual={config.id}"
         if config.device_id in self.devices and not self._find("virtual", config.id):
             raise BackendError("Sink name is already in use by an unowned resource")
         self._load(
@@ -274,6 +297,7 @@ class PipeWireBackend(AudioBackend):
                 f"channels={len(LAYOUTS[config.layout])}",
                 "channel_map=" + ",".join(LAYOUTS[config.layout]),
                 "sink_properties=" + self._property_argument(properties),
+                *description_args,
             ],
             "virtual",
             config.id,

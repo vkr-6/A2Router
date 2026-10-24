@@ -253,3 +253,46 @@ def test_device_master_controls_use_native_server_commands(server):
     assert calls == [["set-sink-volume", "sink", "40%"], ["set-source-mute", "mic", "1"]]
     assert backend.get_device("source:mic").properties["controls"]["muted"] is True
     assert not backend.capabilities()["meters"]
+
+
+@pytest.mark.parametrize("name", ["My audio output", "User's output", 'Output "A"'])
+def test_legacy_sink_description_uses_one_quote_level(server, name):
+    backend = PipeWireBackend(server, owner="test")
+    backend.refresh()
+    backend.server["server_name"] = "PulseAudio (on PipeWire 0.3.48)"
+    config = VirtualDevice(name)
+    requests = []
+
+    def load(module_name, args, kind, ident, verify):
+        requests.append(args)
+        return "20"
+
+    backend._load = load
+    backend._create_virtual(config)
+    args = requests[0]
+    description = next(arg.partition("=")[2] for arg in args if arg.startswith("device.description="))
+    assert description[1:-1] == name
+    assert description[0] == description[-1] and description[0] not in name
+    properties = next(arg for arg in args if arg.startswith("sink_properties="))
+    assert "device.description" not in properties
+    assert "a2router.owner=test" in properties and config.id in properties
+
+
+@pytest.mark.parametrize("name", ["Both ' and \" quotes", "Back\\slash", "Ending\\"])
+def test_legacy_unrepresentable_names_fail_before_module_creation(server, name):
+    backend = PipeWireBackend(server, owner="test")
+    backend.refresh()
+    backend.server["server_name"] = "PulseAudio (on PipeWire 0.3.48)"
+    with pytest.raises(BackendError, match="simpler name"):
+        backend.create_virtual_device(VirtualDevice(name))
+    assert not backend.virtual_devices
+    assert not any(cmd[0] == "load-module" for cmd in server.commands)
+
+
+def test_legacy_parser_detection_does_not_change_other_servers(server):
+    backend = PipeWireBackend(server)
+    for name in ("PulseAudio", "PulseAudio (on PipeWire 1.0.5)", "PulseAudio (on PipeWire 0.3.80)"):
+        backend.server = {"server_name": name}
+        assert not backend._legacy_property_parser()
+    backend.server = {"server_name": "PulseAudio (on PipeWire 0.3.48)"}
+    assert backend._legacy_property_parser()

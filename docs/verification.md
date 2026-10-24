@@ -23,3 +23,21 @@ CI launcher fixes (2026-10-24):
 - Full Windows packaging and live PipeWire execution require a CI rerun;
   the local environment has no PipeWire daemons. RTKit warnings are separate
   from the fatal socket-directory error and do not require elevated audio setup.
+
+Linux property-parser fix (2026-10-24):
+
+- Reproduced corrupted nested `device.description` and ownership properties on
+  real PipeWire 0.3.48, using extracted Ubuntu 22.04 packages in a private session.
+- Legacy creation now passes the description as a separately quoted top-level
+  property and keeps ownership tags in a simple proplist. Verification and
+  cleanup checks remain enabled.
+- On 0.3.48, names containing both quote types or backslashes are rejected before
+  allocation with an upgrade/simpler-name explanation; names with spaces or
+  either quote type retain their exact text. Modern quoting is unchanged.
+- `dbus-run-session -- python tests/run_private_pipewire.py`: 3 passed on
+  PipeWire 0.3.48 and 3 passed on PipeWire 1.0.5 (temporary extracted runtimes).
+  Includes mono/stereo/5.1/7.1, real PCM fan-out/mixing, GUI operations, server
+  restart restoration, ownership and cleanup. No physical playback was tested.
+- Full Python suite: 150 passed, 13 skipped. Ruff check/format passed.
+- No audio service, Windows software or driver was installed; all private
+  daemons and managed test resources were cleaned up by the harness.

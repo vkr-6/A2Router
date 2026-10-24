@@ -20,3 +20,11 @@ A2ROUTER_INTEGRATION=1 A2ROUTER_PCM_TEST=1 .venv/bin/python -m pytest tests/test
 ```
 
 The daemon restart test is enabled only by the private harness. Integration sinks are silent software destinations and are tagged with a random test owner. Tests clean only their resources; private daemon processes are terminated even after failures. No physical speaker or microphone path was tested in this session.
+
+### Older PipeWire versions
+
+PipeWire 0.3.48 uses a legacy module-argument parser. A2Router preserves virtual
+sink names using a compatible quoting path. Names containing both single and
+double quotes, or backslashes, cannot be represented faithfully on that version
+and are rejected before creating a resource. Use a simpler name or upgrade
+PipeWire. Ownership verification and cleanup still apply.

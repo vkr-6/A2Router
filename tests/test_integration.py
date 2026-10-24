@@ -8,7 +8,7 @@ import pytest
 
 from a2router.backends.linux_pipewire import PipeWireBackend
 from a2router.controller import Controller
-from a2router.models import LAYOUTS, VirtualDevice
+from a2router.models import LAYOUTS, BackendError, VirtualDevice
 
 pytestmark = [
     pytest.mark.integration,
@@ -31,7 +31,16 @@ def test_server_layouts_fanout_mixing_restore_cleanup(tmp_path):
     definitions = []
     try:
         for layout in LAYOUTS:
-            config = VirtualDevice("a2router 'test' \"" + layout + '"', layout)
+            name = "a2router 'test' \"" + layout + '"'
+            if backend._legacy_property_parser():
+                # The old parser cannot unescape mixed quote types. Verify
+                # rejection before allocation, then test each supported type.
+                before = backend._modules()
+                with pytest.raises(BackendError, match="simpler name"):
+                    backend.create_virtual_device(VirtualDevice(name, layout))
+                assert backend._modules() == before
+                name = ("a2router 'test' " if layout == "mono" else 'a2router "test" ') + layout
+            config = VirtualDevice(name, layout)
             definitions.append(config)
             backend.create_virtual_device(config)
             assert backend.get_device(config.device_id).positions == LAYOUTS[layout]
