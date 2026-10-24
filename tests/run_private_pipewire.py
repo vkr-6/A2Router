@@ -13,6 +13,27 @@ import time
 from pathlib import Path
 
 
+def private_environment(runtime, inherited):
+    """Use XDG's standard Pulse subdirectory on both old and new PipeWire."""
+    runtime = Path(runtime)
+    (runtime / "pulse").mkdir(mode=0o700, exist_ok=True)
+    env = inherited.copy()
+    # PipeWire versions differ in how PULSE_RUNTIME_PATH is interpreted. Let
+    # the server derive its pulse directory from XDG_RUNTIME_DIR instead.
+    env.pop("PULSE_RUNTIME_PATH", None)
+    env.update(
+        {
+            "XDG_RUNTIME_DIR": str(runtime),
+            "PIPEWIRE_RUNTIME_DIR": str(runtime),
+            "PIPEWIRE_REMOTE": "pipewire-0",
+            "PULSE_SERVER": "unix:" + str(runtime / "pulse/native"),
+            "A2ROUTER_INTEGRATION": "1",
+            "A2ROUTER_PCM_TEST": "1",
+        }
+    )
+    return env
+
+
 def main():
     repo = Path(__file__).resolve().parents[1]
     root = repo / "build" / "pipewire-root" / "usr"
@@ -33,16 +54,7 @@ def main():
         if not shutil.which(binary, path=env["PATH"]):
             raise SystemExit(f"Missing test dependency: {binary}")
     with tempfile.TemporaryDirectory(prefix="a2router-pw-") as runtime:
-        env.update(
-            {
-                "XDG_RUNTIME_DIR": runtime,
-                "PIPEWIRE_RUNTIME_DIR": runtime,
-                "PULSE_RUNTIME_PATH": runtime + "/pulse",
-                "PULSE_SERVER": "unix:" + runtime + "/pulse/native",
-                "A2ROUTER_INTEGRATION": "1",
-                "A2ROUTER_PCM_TEST": "1",
-            }
-        )
+        env = private_environment(runtime, env)
         processes, logs = [], []
         try:
             for binary in ("pipewire", "pipewire-pulse", "wireplumber"):

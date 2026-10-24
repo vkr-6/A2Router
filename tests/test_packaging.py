@@ -80,3 +80,9 @@ def test_frozen_audio_tools_receive_host_library_path(monkeypatch):
     assert "LD_LIBRARY_PATH" not in system_audio_environment()
     monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/original/host/libraries")
     assert system_audio_environment()["LD_LIBRARY_PATH"] == "/original/host/libraries"
+
+
+def test_windows_staging_includes_workflow_test_inputs():
+    script = (ROOT / "tools/windows/build-portable.ps1").read_text()
+    folders = next(line for line in script.splitlines() if line.startswith("foreach ($folder in"))
+    assert "'.github'" in folders

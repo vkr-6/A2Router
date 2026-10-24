@@ -9,7 +9,7 @@ $ProgressPreference = 'SilentlyContinue'
 $source = (Resolve-Path "$PSScriptRoot\..\..").ProviderPath
 New-Item -ItemType Directory -Force $Workspace | Out-Null
 # Work on a task-owned local copy; UNC workdirs can break native build tools.
-foreach ($folder in @('a2router', 'src', 'tests', 'tools', 'vendor')) {
+foreach ($folder in @('.github', 'a2router', 'src', 'tests', 'tools', 'vendor')) {
     & robocopy "$source\$folder" "$Workspace\$folder" /E /R:2 /W:1 /XD __pycache__ .pytest_cache .ruff_cache /NFL /NDL /NJH /NJS
     if ($LASTEXITCODE -ge 8) { throw "Copy failed: $folder" }
 }
