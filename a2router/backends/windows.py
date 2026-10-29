@@ -407,16 +407,7 @@ class WindowsBackend(AudioBackend):
                         ):
                             failures[source_id] = self._error()
                             break
-                        self._read_stats()
-                        verified = next(
-                            (
-                                d.get("volume")
-                                for d in self._session_stats(source_id).get("devices", [])
-                                if d.get("id") == destination
-                            ),
-                            None,
-                        )
-                        if verified is None or abs(verified - desired) > 0.0001:
+                        if not self._wait_stream_gain(source_id, destination, desired):
                             failures[source_id] = "Native stream gain could not be verified"
                             break
                 if source_id in failures:

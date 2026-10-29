@@ -62,3 +62,23 @@ Windows controls and matrix fixes (2026-10-29):
 - Windows backend tests use simulated native APIs. Windows calibration capture
   changes require a rebuilt DLL and Windows hardware verification; Bluetooth
   microphone/playback behavior was not measured. No Windows software was installed.
+
+Failure-path audit (2026-10-29):
+
+- Disabled-route reconciliation now disconnects residual resources even while
+  global transport is running.
+- Failed profile replacement stops resources created by the replacement before
+  restoring previous routes. If cleanup fails, transport recovery is suspended
+  and resource identities remain visible for a cleanup retry.
+- Calibration no longer clears an existing emergency-stop latch. Explicit Start
+  is required before another measurement can begin.
+- Windows refresh-time gain reconciliation uses the same bounded telemetry wait
+  as direct volume edits, avoiding a second supervisor-snapshot race.
+- Virtual-device definitions and route boolean flags now produce structured
+  errors before allocation. Atomic JSON writes reject non-finite/unserializable
+  values and wrap directory-creation errors, preserving existing files.
+- Verification: full Linux Python/Qt suite 168 passed, 13 skipped; 13 dedicated
+  failure-path regressions passed; Ruff check/format and git diff checks passed.
+  Windows API behavior is simulated in these tests; no Windows software or
+  driver was installed. Real PipeWire and Windows hardware suites remain opt-in
+  and were not run in this audit. This is a scoped audit, not proof of zero bugs.

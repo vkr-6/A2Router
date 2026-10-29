@@ -1,5 +1,6 @@
 from copy import deepcopy
 from dataclasses import asdict
+from uuid import UUID
 
 from a2router.channels import validate_channel_map
 from a2router.models import LAYOUTS, BackendError, Route, VirtualDevice
@@ -53,6 +54,8 @@ class AudioBackend:
         }
 
     def _validate_route(self, route, allow_missing=False):
+        if type(route.enabled) is not bool or type(route.monitoring_confirmed) is not bool:
+            raise BackendError("Route enabled and monitoring confirmation must be booleans")
         if (
             type(route.volume) not in (int, float)
             or not 0 <= route.volume <= 1
@@ -154,8 +157,7 @@ class AudioBackend:
 
     def _reconcile_route(self, route):
         if not route.enabled or not self.transport_running:
-            if not self.transport_running:
-                self._disconnect(route)
+            self._disconnect(route)
             route.status = "disabled" if not route.enabled else "stopped"
             route.error = ""
             return
@@ -214,11 +216,22 @@ class AudioBackend:
     def create_virtual_device(self, config):
         if not self.capabilities()["virtual_devices"]:
             raise BackendError("Virtual endpoints require a real virtual audio driver on this platform")
-        if isinstance(config, dict):
-            config = VirtualDevice(**config)
-        if config.layout not in self.capabilities()["layouts"]:
+        try:
+            if isinstance(config, dict):
+                config = VirtualDevice(**config)
+            if not isinstance(config, VirtualDevice) or not isinstance(config.id, str):
+                raise TypeError("Expected a virtual-device definition with a UUID")
+            UUID(config.id)
+        except (TypeError, ValueError) as exc:
+            raise BackendError(f"Invalid virtual-device definition: {exc}") from exc
+        if not isinstance(config.layout, str) or config.layout not in self.capabilities()["layouts"]:
             raise BackendError("Unsupported channel layout")
-        if not config.name.strip() or len(config.name) > 128 or any(ord(c) < 32 for c in config.name):
+        if (
+            not isinstance(config.name, str)
+            or not config.name.strip()
+            or len(config.name) > 128
+            or any(ord(c) < 32 for c in config.name)
+        ):
             raise BackendError("Device name must contain 1–128 printable characters")
         old = self.virtual_devices.get(config.id)
         if old and old != config:

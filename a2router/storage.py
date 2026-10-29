@@ -119,17 +119,17 @@ def save(path, data):
 def atomic_json(path, data):
     """Write reviewed JSON metadata atomically; callers validate their own schema."""
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as stream:
             temporary = stream.name
-            json.dump(data, stream, indent=2, ensure_ascii=False)
+            json.dump(data, stream, indent=2, ensure_ascii=False, allow_nan=False)
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
-    except OSError as exc:
+    except (OSError, TypeError, ValueError) as exc:
         raise BackendError(f"Cannot save configuration: {exc}") from exc
     finally:
         if temporary and os.path.exists(temporary):

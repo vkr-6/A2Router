@@ -129,7 +129,8 @@ class Controller:
         from a2router.calibration import check_request, measure, validate_result
 
         check_request(self.backend, microphone_id, outputs, reference_id, passes, level_db, channel)
-        self._emergency.clear()
+        if self._emergency.is_set():
+            raise BackendError("Emergency stop is active; explicitly start routing before calibration")
         running = self.backend.transport_running
         self.pause_routes()
         failure = None
@@ -243,7 +244,16 @@ class Controller:
                 self.backend.transport_running = True
                 self.refresh()
             return errors
-        except Exception:
+        except Exception as failure:
+            try:
+                self.pause_routes()  # Stop any routes started by the failed replacement.
+            except BackendError as exc:
+                # Keep failed route/resource IDs visible so cleanup can be retried.
+                # Restoring the old profile here could overlap leaked playback.
+                raise BackendError(
+                    f"{failure}; stopping replacement routes failed: {exc}; "
+                    "automatic recovery suspended, replacement definitions retained for cleanup"
+                ) from failure
             self.backend.routes.clear()
             self.backend.endpoint_aliases = dict(previous.get("endpoint_aliases", {}))
             self.restore(previous, activate=False)

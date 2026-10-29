@@ -284,7 +284,8 @@ def test_stream_gain_stats_failure_rolls_back_native_and_desired_state():
     assert route.volume == 1 and bridge.sessions["cable-out"]["devices"][0]["volume"] == 1
 
 
-def test_stream_gain_waits_for_supervisor_snapshot_without_restarting():
+@pytest.mark.parametrize("mode", ["edit", "refresh"])
+def test_stream_gain_waits_for_supervisor_snapshot_without_restarting(mode):
     class DelayedStats(StreamBridge):
         stale = None
         remaining = 0
@@ -305,8 +306,13 @@ def test_stream_gain_waits_for_supervisor_snapshot_without_restarting():
     backend.refresh()
     route = backend.create_route("cable-out", "headphones")
     starts = len(bridge.starts)
-    backend.set_route_volume(route.id, 0.2)
-    assert route.volume == 0.2
+    if mode == "edit":
+        backend.set_route_volume(route.id, 0.2)
+        assert route.volume == 0.2
+    else:
+        bridge.sessions["cable-out"]["devices"][0]["volume"] = 0.2
+        backend.refresh()
+        assert route.status == "connected" and route.volume == 1
     assert len(bridge.gain_calls) == 1 and len(bridge.starts) == starts
 
 
