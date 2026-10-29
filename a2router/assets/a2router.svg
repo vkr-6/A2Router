@@ -1,9 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
- <rect x="4" y="4" width="120" height="120" rx="25" fill="#161d18"/>
- <path d="M24 98 52 29h13L40 98Z" fill="#c4f35f"/>
- <path d="m61 29 27 69H75L55 45Z" fill="#f4f7ef"/>
- <path d="M40 77h38" fill="none" stroke="#c4f35f" stroke-width="8"/>
- <circle cx="79" cy="77" r="5" fill="#c4f35f"/>
- <path d="M83 31c0-7 6-11 12-11 7 0 12 4 12 10 0 6-5 10-11 14l-12 9h23" fill="none" stroke="#c4f35f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
- <path d="M28 108h55" stroke="#5a7153" stroke-width="2" stroke-linecap="round"/>
+ <title>A2Router</title>
+ <g fill="none" stroke="#3682d9" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M21 105 56 24 91 105M35 74h58l14-14" stroke-width="9"/>
+  <path d="M84 27c0-6 5-10 11-10s11 4 11 10c0 5-4 8-9 12L85 49h22" stroke-width="5"/>
+ </g>
+ <circle cx="108" cy="59" r="5" fill="#3682d9"/>
 </svg>

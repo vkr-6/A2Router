@@ -346,6 +346,27 @@ class MainWindow(QMainWindow):
         source, dest = self.source.currentData(), self.destination.currentData()
         confirmed = self.monitor_confirm.isChecked()
         if source and dest:
+            source_device = self.view_devices.get(source, {})
+            destination_device = self.view_devices.get(dest, {})
+            if (
+                not confirmed
+                and not source_device.get("monitor_of")
+                and destination_device.get("virtual") is not True
+            ):
+                answer = QMessageBox.question(
+                    self,
+                    "Enable input monitoring?",
+                    f"Play {source_device.get('name', source)} through "
+                    f"{destination_device.get('name', dest)}? "
+                    "A microphone near speakers can create loud feedback. "
+                    "Use headphones or lower the speaker volume before continuing.",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                )
+                if answer != QMessageBox.Yes:
+                    self.error.setText("Microphone monitoring cancelled; explicit confirmation is required")
+                    return
+                confirmed = True
             mapping = []
             if self.channel_group.isChecked():
                 for row in range(self.channel_table.rowCount()):

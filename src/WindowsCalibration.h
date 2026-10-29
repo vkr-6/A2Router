@@ -111,6 +111,9 @@ inline CalibrationRecording recordCalibration(const wchar_t* micId, const wchar_
     // Reference is a common monotonic software-start epoch, not a fabricated
     // hardware presentation timestamp. Relative measurements retain startup jitter.
     recording.signalQpc = start + 4500000;
+    // Discard startup packets before the chirp rather than using an unstable
+    // timestamp as the recording anchor. Never discard gaps during measurement.
+    constexpr uint64_t settleTime = 2500000; // 250 ms; chirp begins at 450 ms.
     while (calibrationQpc() - start < 32000000) {
         if (calibrationCancelled.load(std::memory_order_relaxed)) throw std::runtime_error("Calibration cancelled");
         UINT32 frames = 0;
@@ -118,6 +121,11 @@ inline CalibrationRecording recordCalibration(const wchar_t* micId, const wchar_
         while (frames) {
             BYTE* data = nullptr; DWORD flags = 0; UINT64 position = 0, qpc = 0;
             calibrationCheck(capture->GetBuffer(&data, &frames, &flags, &position, &qpc), "Microphone packet");
+            if (calibrationQpc() - start < settleTime) {
+                calibrationCheck(capture->ReleaseBuffer(frames), "Startup microphone packet release");
+                calibrationCheck(capture->GetNextPacketSize(&frames), "Startup microphone packet query");
+                continue;
+            }
             const bool invalid = (flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR) || !qpc ||
                 (!data && !(flags & AUDCLNT_BUFFERFLAGS_SILENT)) ||
                 (recording.firstQpc && (flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY));
@@ -133,10 +141,12 @@ inline CalibrationRecording recordCalibration(const wchar_t* micId, const wchar_
                 recorded = std::max(recorded, static_cast<size_t>(offset) + frames);
             }
             calibrationCheck(capture->ReleaseBuffer(frames), "Microphone packet release");
-            if (invalid || !bounds) throw std::runtime_error("Unreliable microphone timestamps or capture discontinuity; retry measurement");
+            if (invalid || !bounds) throw std::runtime_error(
+                "Microphone capture lost timing after settling. Close apps using the microphone, "
+                "disable microphone enhancements and retry; for Bluetooth output use a separate wired/USB microphone");
             calibrationCheck(capture->GetNextPacketSize(&frames), "Microphone packet query");
         }
-        if (!ambientChecked && calibrationQpc() - start > 2500000) {
+        if (!ambientChecked && recorded >= size_t(recording.rate) / 5) {
             const auto count = std::min(recorded, size_t(recording.rate) / 5);
             double energy = 0;
             for (size_t i = 0; i < count; ++i) energy += recording.samples[i] * double(recording.samples[i]);

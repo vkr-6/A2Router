@@ -82,3 +82,18 @@ Failure-path audit (2026-10-29):
   Windows API behavior is simulated in these tests; no Windows software or
   driver was installed. Real PipeWire and Windows hardware suites remain opt-in
   and were not run in this audit. This is a scoped audit, not proof of zero bugs.
+
+Monitoring confirmation, capture settling and transparent branding (2026-10-29):
+
+- Added explicit Yes/No route monitoring confirmation with No as default; accepted
+  consent is persisted on the route. Backend feedback protections remain active.
+- Discarded startup capture packets for 250 ms before the 450 ms chirp onset.
+  Subsequent timing errors/discontinuities still reject measurements. Ambient
+  loudness checking now waits for actual retained samples rather than an elapsed
+  startup timer. This native WASAPI change requires Windows hardware retesting.
+- Replaced icon and wordmark backgrounds with a simple original blue SVG mark.
+  Existing GUI, Windows EXE/setup ICO generation, Linux desktop packaging and
+  README reference these source assets. Old binaries must be rebuilt.
+- Full Linux Python/Qt suite: 169 passed, 13 skipped. Ruff check/format passed.
+  Both SVGs rendered through Qt with transparent corners verified; Windows ICO
+  generated on Linux. No Windows installation or hardware test was performed.

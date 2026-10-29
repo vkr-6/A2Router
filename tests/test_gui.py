@@ -26,7 +26,10 @@ def wait(app, window):
     assert not window.busy
 
 
-def test_gui_controls_and_shutdown(app, tmp_path):
+def test_gui_controls_and_shutdown(app, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.No)
     backend = MockBackend()
     window = MainWindow(Controller(backend), tmp_path / "session.json")
     try:
@@ -480,5 +483,30 @@ def test_matrix_selectors_follow_live_format_and_empty_channel_refresh(app, tmp_
         window.submit(window.controller.refresh)
         wait(app, window)
         assert editor.grid.columnCount() == 0
+    finally:
+        shutdown(app, window)
+
+
+def test_monitoring_confirmation_is_recorded_only_after_explicit_yes(app, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    backend = MockBackend()
+    window = MainWindow(Controller(backend), tmp_path / "monitoring.json")
+    try:
+        wait(app, window)
+        window.source.setCurrentIndex(window.source.findData("mic"))
+        window.destination.setCurrentIndex(window.destination.findData("speakers"))
+        assert not window.monitor_confirm.isChecked()
+        monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
+        window.add_route()
+        wait(app, window)
+        route = backend.list_routes()[0]
+        assert route.monitoring_confirmed and route.status == "connected"
+        assert not window.monitor_confirm.isChecked()  # Consent applies to this route.
+        window.destination.setCurrentIndex(window.destination.findData("headphones"))
+        monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.No)
+        window.add_route()
+        wait(app, window)
+        assert len(backend.routes) == 1
     finally:
         shutdown(app, window)

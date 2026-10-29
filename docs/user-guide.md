@@ -73,7 +73,7 @@ metadata and desired route delays; Export measurement writes reviewed JSON metad
 The full Windows acoustic path still requires target-machine build/hardware testing.
 
 Settings offers System/White/Dark/Lime/Blue/Violet and density. The new A-squared logo
-is an original vector adaptation of the supplied reference. Diagnostics contains
+uses a simple blue routing monogram with a transparent background. Diagnostics contains
 backend observations and logs; export prompts for review of IDs/names/library paths.
 
 Shortcuts: Ctrl+N/Open Ctrl+O/Save Ctrl+S/Save As Ctrl+Shift+S, refresh Ctrl+R/F5,
@@ -99,3 +99,17 @@ Quiet ambient microphone samples are allowed before a calibration chirp. If the
 entire recording remains silent, check the selected physical microphone channel,
 mute, Windows microphone permission and whether the chosen speaker is audible
 at the microphone. A silent digital stream cannot provide an acoustic delay.
+
+### Input-monitoring confirmation and capture startup
+
+Adding a microphone/input route to a physical output now asks for explicit
+confirmation if monitoring has not already been allowed. Declining leaves the
+route uncreated. Approval is stored on that route; direct feedback loops remain
+blocked by the backend.
+
+Windows acoustic calibration discards the initial 250 ms of capture packets to
+allow microphone startup to settle, before the test chirp begins at 450 ms. The
+recording anchor remains a real microphone timestamp. Invalid timestamps or lost
+packets during the subsequent measurement still reject the pass. If this persists,
+close other microphone applications, disable microphone enhancements, and try a
+wired/USB microphone, especially when measuring Bluetooth playback.
