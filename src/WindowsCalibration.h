@@ -140,9 +140,9 @@ inline CalibrationRecording recordCalibration(const wchar_t* micId, const wchar_
             const auto count = std::min(recorded, size_t(recording.rate) / 5);
             double energy = 0;
             for (size_t i = 0; i < count; ++i) energy += recording.samples[i] * double(recording.samples[i]);
-            if (!count || energy / count < 1e-18)
-                throw std::runtime_error("No ambient microphone signal. Check mute, channel selection and microphone permission");
-            if (energy / count > 0.09)
+            // A quiet room or microphone noise gate can legitimately produce
+            // silence before the chirp. Judge missing signal after recording.
+            if (count && energy / count > 0.09)
                 throw std::runtime_error("Microphone input is too loud for calibration. Reduce input gain or ambient noise");
             ambientChecked = true;
         }
@@ -168,6 +168,10 @@ inline CalibrationRecording recordCalibration(const wchar_t* micId, const wchar_
     }
     if (!recorded || !recording.firstQpc) throw std::runtime_error("The microphone returned no usable samples");
     recording.samples.resize(recorded);
+    double capturedEnergy = 0;
+    for (const auto sample : recording.samples) capturedEnergy += sample * double(sample);
+    if (capturedEnergy / recorded < 1e-18)
+        throw std::runtime_error("Microphone recording is silent, including during the test signal. Check microphone permission, mute, selected channel and speaker audibility");
     return recording;
 }
 }

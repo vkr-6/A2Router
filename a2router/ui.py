@@ -402,6 +402,7 @@ class MainWindow(QMainWindow):
         destination = self.view_devices.get(pair[1], {})
         for index in range(min(source.get("channels") or 0, destination.get("channels") or 0, 64)):
             self.add_channel_connection(source_index=index, destination_index=index)
+        self._matrix_changed()
 
     def add_channel_connection(self, checked=False, *, source_index=0, destination_index=0):
         endpoints = [

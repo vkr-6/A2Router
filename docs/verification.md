@@ -41,3 +41,24 @@ Linux property-parser fix (2026-10-24):
 - Full Python suite: 150 passed, 13 skipped. Ruff check/format passed.
 - No audio service, Windows software or driver was installed; all private
   daemons and managed test resources were cleaned up by the harness.
+
+Windows controls and matrix fixes (2026-10-29):
+
+- Gain confirmation now waits up to 600 ms for the native supervisor's periodic
+  telemetry publication. The native synchronous WASAPI verification and rollback
+  paths remain in place; volume edits do not restart routes.
+- Acoustic capture accepts silent ambient samples before the chirp, retaining
+  the loud-input guard. A completely silent recording is rejected after the test
+  signal; timestamp, discontinuity and analysis-quality checks remain enabled.
+  Repeated identical per-pass errors are shown once.
+- Channel Matrix now has synchronized source/output selectors and refreshes when
+  formats change or channel information becomes unavailable. Saved endpoint
+  formats are distinguished from the active mix format; a pending change no
+  longer reports unconditional success or invents additional active channels.
+- Linux verification: full Python/Qt suite 154 passed, 13 skipped; focused
+  device controls/calibration/GUI tests 46 passed; Ruff check/format passed.
+  GNU C++20 build and execution of tests/native_core.cpp passed (PCM integrity,
+  channel operations, queues, concurrency and drift controller checks).
+- Windows backend tests use simulated native APIs. Windows calibration capture
+  changes require a rebuilt DLL and Windows hardware verification; Bluetooth
+  microphone/playback behavior was not measured. No Windows software was installed.

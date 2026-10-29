@@ -2,7 +2,7 @@
 
 import math
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSignalBlocker, Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -26,6 +26,21 @@ class MatrixEditor(QWidget):
         self.pair = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
+        endpoints = QHBoxLayout()
+        self.source_selector = QComboBox()
+        self.destination_selector = QComboBox()
+        for caption, selector, original in (
+            ("Source", self.source_selector, window.source),
+            ("Output", self.destination_selector, window.destination),
+        ):
+            endpoints.addWidget(QLabel(caption))
+            endpoints.addWidget(selector, 1)
+            selector.currentIndexChanged.connect(
+                lambda _, selected=selector, target=original: target.setCurrentIndex(
+                    target.findData(selected.currentData())
+                )
+            )
+        layout.addLayout(endpoints)
         row = QHBoxLayout()
         self.preset = QComboBox()
         self.preset.addItems(
@@ -99,6 +114,18 @@ class MatrixEditor(QWidget):
 
     def refresh(self, *_):
         w = self.window
+        for selector, original in (
+            (self.source_selector, w.source),
+            (self.destination_selector, w.destination),
+        ):
+            with QSignalBlocker(selector):
+                entries = [(original.itemText(i), original.itemData(i)) for i in range(original.count())]
+                current = [(selector.itemText(i), selector.itemData(i)) for i in range(selector.count())]
+                if entries != current:
+                    selector.clear()
+                    for label, ident in entries:
+                        selector.addItem(label, ident)
+                selector.setCurrentIndex(selector.findData(original.currentData()))
         source = w.view_devices.get(w.source.currentData(), {})
         dest = w.view_devices.get(w.destination.currentData(), {})
         rows, columns = self.labels(source), self.labels(dest)

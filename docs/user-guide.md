@@ -85,3 +85,17 @@ control shortcuts, launch and optional shared-driver installation; driver instal
 and removal are unchecked by default. Uninstall preserves profiles and the shared
 driver unless explicitly selected. Linux has separate tar.gz and .deb packages;
 PipeWire and desktop system libraries are dependencies, not bundled audio services.
+
+### Channel formats and calibration troubleshooting
+
+Select the source and output directly in Channel Matrix. Its rows and columns
+follow the active endpoint formats. Windows may save a device format before the
+active audio engine adopts it; close applications using that endpoint and refresh
+if the active channel count has not changed. A VB-CABLE playback endpoint and
+its recording endpoint have separate active formats: inspect both rather than
+assuming a playback-format change also reconfigures capture.
+
+Quiet ambient microphone samples are allowed before a calibration chirp. If the
+entire recording remains silent, check the selected physical microphone channel,
+mute, Windows microphone permission and whether the chosen speaker is audible
+at the microphone. A silent digital stream cannot provide an acoustic delay.

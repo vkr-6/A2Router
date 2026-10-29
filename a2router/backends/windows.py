@@ -482,6 +482,26 @@ class WindowsBackend(AudioBackend):
         except (ValueError, TypeError) as exc:
             raise BackendError("Invalid native recording payload") from exc
 
+    def _wait_stream_gain(self, source_id, destination_id, expected):
+        # Telemetry is published periodically by the native supervisor. The
+        # control call verifies WASAPI synchronously, but its snapshot can lag.
+        deadline = time.monotonic() + 0.6
+        while True:
+            self._read_stats()
+            observed = next(
+                (
+                    d.get("volume")
+                    for d in self._session_stats(source_id).get("devices", [])
+                    if d.get("id") == destination_id
+                ),
+                None,
+            )
+            if type(observed) in (int, float) and abs(observed - expected) <= 0.0001:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.01)
+
     def set_route_volume(self, route_id, volume=None, muted=None):
         if not self.capabilities().get("route_controls"):
             raise BackendError("Native stream controls are unavailable; rebuild the DLL")
@@ -499,30 +519,12 @@ class WindowsBackend(AudioBackend):
             if not self.bridge.ar_source_set_volume(source, int(capture), dest, 0 if mute else gain):
                 raise BackendError(self._error())
             try:
-                self._read_stats()
-                observed = next(
-                    (
-                        d.get("volume")
-                        for d in self._session_stats(route.source_id).get("devices", [])
-                        if d.get("id") == dest
-                    ),
-                    None,
-                )
-                if observed is None or abs(observed - (0 if mute else gain)) > 0.0001:
-                    raise BackendError("Stream gain readback failed")
+                if not self._wait_stream_gain(route.source_id, dest, 0 if mute else gain):
+                    raise BackendError("Stream gain telemetry did not confirm the change")
             except BackendError as exc:
                 rollback = bool(self.bridge.ar_source_set_volume(source, int(capture), dest, old))
                 try:
-                    self._read_stats()
-                    previous = next(
-                        (
-                            d.get("volume")
-                            for d in self._session_stats(route.source_id).get("devices", [])
-                            if d.get("id") == dest
-                        ),
-                        None,
-                    )
-                    rollback = rollback and previous is not None and abs(previous - old) < 0.0001
+                    rollback = rollback and self._wait_stream_gain(route.source_id, dest, old)
                 except BackendError:
                     rollback = False
                 raise BackendError(
@@ -702,6 +704,14 @@ class WindowsBackend(AudioBackend):
         ):
             raise BackendError(self._error())
         self.refresh()
+        if self.last_error:
+            raise BackendError("Format was applied, but device refresh failed: " + self.last_error)
+        active = self.get_device(device_id)
+        if active.channels != config["channels"] or active.sample_rate != config["sample_rate"]:
+            return (
+                "Windows saved the format, but the active mix format has not changed yet. "
+                "Close apps using this endpoint and refresh devices. The matrix uses the active format."
+            )
         return "Windows endpoint format applied and verified."
 
     def rename_device(self, device_id, name):

@@ -147,7 +147,8 @@ def measure(backend, microphone_id, outputs, reference_id, passes, level_db, cha
         try:
             measured.append({"device_id": ident, **summarize(valid, passes)})
         except BackendError as exc:
-            raise BackendError(f"{backend.get_device(ident).name}: {exc}. " + "; ".join(errors)) from exc
+            details = "; ".join(dict.fromkeys(errors))
+            raise BackendError(f"{backend.get_device(ident).name}: {exc}. {details}".rstrip(". ")) from exc
     if len(rates) != 1:
         raise BackendError("Microphone rate changed during calibration; retry")
     reference = next(p["arrival_ms"] for p in measured if p["device_id"] == reference_id)

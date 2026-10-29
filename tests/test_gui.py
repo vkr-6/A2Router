@@ -458,3 +458,27 @@ def test_calibration_gui_calls_capture_and_applies_only_on_review(app, monkeypat
         assert first.delay_ms == 63
     finally:
         shutdown(app, window)
+
+
+def test_matrix_selectors_follow_live_format_and_empty_channel_refresh(app, tmp_path):
+    backend = MockBackend()
+    window = MainWindow(Controller(backend), tmp_path / "matrix.json")
+    try:
+        wait(app, window)
+        editor = window.studio.matrix
+        editor.source_selector.setCurrentIndex(editor.source_selector.findData("mic"))
+        editor.destination_selector.setCurrentIndex(editor.destination_selector.findData("headphones"))
+        assert window.source.currentData() == "mic"
+        assert window.destination.currentData() == "headphones"
+        backend.devices["headphones"].channels = 8
+        backend.devices["headphones"].positions = tuple(f"channel-{i}" for i in range(8))
+        window.submit(window.controller.refresh)
+        wait(app, window)
+        assert editor.grid.columnCount() == 8
+        assert "8 ch" in editor.destination_selector.currentText()
+        backend.devices["headphones"].channels = None
+        window.submit(window.controller.refresh)
+        wait(app, window)
+        assert editor.grid.columnCount() == 0
+    finally:
+        shutdown(app, window)

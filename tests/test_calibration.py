@@ -206,3 +206,8 @@ def test_emergency_cancels_measurement_without_restoring_playback():
     assert route.enabled and not backend.resources and not backend.transport_running
     controller.resume_routes()
     assert backend.resources == {route.id}
+
+
+def test_chirp_with_silent_ambient_window_remains_measurable():
+    result = analyze(recording(35, noise=0))
+    assert result["arrival_ms"] == pytest.approx(35, abs=0.1)

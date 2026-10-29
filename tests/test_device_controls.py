@@ -282,3 +282,43 @@ def test_stream_gain_stats_failure_rolls_back_native_and_desired_state():
     with pytest.raises(BackendError, match="previous stream gain restored"):
         backend.set_route_volume(route.id, 0.2)
     assert route.volume == 1 and bridge.sessions["cable-out"]["devices"][0]["volume"] == 1
+
+
+def test_stream_gain_waits_for_supervisor_snapshot_without_restarting():
+    class DelayedStats(StreamBridge):
+        stale = None
+        remaining = 0
+
+        def ar_source_set_volume(self, source, capture, dest, gain):
+            self.stale = super().ar_stats()
+            self.remaining = 3
+            return super().ar_source_set_volume(source, capture, dest, gain)
+
+        def ar_stats(self):
+            if self.remaining:
+                self.remaining -= 1
+                return self.stale
+            return super().ar_stats()
+
+    bridge = DelayedStats()
+    backend = WindowsBackend(bridge)
+    backend.refresh()
+    route = backend.create_route("cable-out", "headphones")
+    starts = len(bridge.starts)
+    backend.set_route_volume(route.id, 0.2)
+    assert route.volume == 0.2
+    assert len(bridge.gain_calls) == 1 and len(bridge.starts) == starts
+
+
+def test_saved_format_with_unchanged_active_mix_reports_pending_state():
+    class PendingFormat(ConfigurationBridge):
+        def ar_set_device_format(self, *args):
+            self.format_calls.append(args)
+            return 1  # Configuration saved; active audio engine still uses stereo.
+
+    backend = WindowsBackend(PendingFormat())
+    backend.refresh()
+    backend.inspect_formats("cable-out")
+    message = backend.configure_device_format("cable-out", FORMATS[-1])
+    assert "active mix format has not changed" in message
+    assert backend.get_device("cable-out").channels == 2
