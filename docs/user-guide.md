@@ -75,7 +75,8 @@ it does not undo already applied engine delays. File → Save stores calibration
 metadata and desired route delays; Export measurement writes reviewed JSON metadata.
 The full Windows acoustic path still requires target-machine build/hardware testing.
 
-Settings defaults to Orange, with System/White/Dark/Lime/Blue/Violet alternatives
+Settings defaults to Orange: black backgrounds with orange selections, active
+buttons and control highlights, plus System/White/Dark/Lime/Blue/Violet alternatives
 and density controls. This branding update switches existing installations to Orange
 once; subsequent theme choices are preserved. Application and packaging icons use
 only the orbital-A mark from the supplied PNG. README branding retains the full

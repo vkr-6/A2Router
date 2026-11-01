@@ -7,7 +7,7 @@ from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import QApplication
 
 THEMES = {
-    "Orange": ("#191715", "#211e1b", "#2a2520", "#faf7f2", "#302820", "#504236", "#ff9600"),
+    "Orange": ("#000000", "#000000", "#000000", "#f5f5f5", "#000000", "#333333", "#ff9600"),
     "White": ("#ffffff", "#ffffff", "#f4f6f8", "#161b22", "#f0f2f5", "#d1d7de", "#3157c8"),
     "Dark": ("#141618", "#1b1e21", "#22262a", "#edf0f2", "#262a2f", "#383e45", "#a9db4e"),
     "Lime": ("#111811", "#19221a", "#202d21", "#eff8e9", "#253527", "#3e5140", "#c2ef62"),
@@ -23,7 +23,7 @@ def apply_theme(window, name, density):
     if name == "System":
         name = "Dark" if app.styleHints().colorScheme() == Qt.ColorScheme.Dark else "White"
     bg, base, alternate, text, button, border, accent = THEMES.get(name, THEMES["Orange"])
-    selected_text = "#101510" if name != "White" else "#ffffff"
+    selected_text = "#000000" if name == "Orange" else "#101510" if name != "White" else "#ffffff"
     muted = "#90989f" if name != "White" else "#68717c"
     palette = QPalette()
     for role, color in [
@@ -64,6 +64,7 @@ def apply_theme(window, name, density):
             border-radius: 3px; padding: 4px 10px; min-height: 18px; }}
         QPushButton:hover, QToolButton:hover {{ border-color: {accent}; }}
         QPushButton:checked, QToolButton:checked {{ background: {accent}; color: {selected_text}; }}
+        QPushButton:pressed, QToolButton:pressed {{ background: {accent}; color: {selected_text}; }}
         QToolButton {{ padding: 2px 10px; }}
         QWidget:disabled {{ color: {muted}; }}
         QHeaderView::section {{ background: {button}; color: {text}; border: 0; padding: 5px; }}

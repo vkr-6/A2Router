@@ -23,7 +23,7 @@ Developed with **OpenAI Codex** under the project owner's direction.
   confidence/spread, cancellation and reviewed compensation. Measurement does not
   automatically apply delays. Native Windows playback/capture needs hardware testing.
 - **Diagnostics:** actual backend observations, action/error log and reviewed export.
-- **Settings:** Orange by default, plus White, Dark, Lime, Blue, Violet and system-following themes.
+- **Settings:** Black with orange accents by default, plus White, Dark, Lime, Blue, Violet and system-following themes.
   Profiles appear only in **File** (New/Open/Save/Save As/Recent profiles).
 
 ![Routing](docs/images/clean-routing.png)

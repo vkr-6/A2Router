@@ -320,6 +320,8 @@ def test_theme_and_table_layout_survive_window_restart(app, tmp_path, monkeypatc
     wait(app, first)
     assert first.studio.theme.currentText() == "Orange"
     assert first.palette().color(QPalette.Highlight).name() == "#ff9600"
+    assert first.palette().color(QPalette.Window).name() == "#000000"
+    assert first.palette().color(QPalette.Base).name() == "#000000"
     assert settings.value("orangeBrandingV1", False, type=bool)
     first.studio.theme.setCurrentText("Dark")
     first.studio.output_table.view.setColumnWidth(0, 267)

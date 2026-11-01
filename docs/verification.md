@@ -204,3 +204,14 @@ Branding follow-up: mark-only icons and upgrade theme activation (2026-11-01):
 - Full Python/Qt suite: 188 passed, 14 skipped. Ruff and diff checks passed.
   Seven mark-only ICO sizes decoded successfully. Linux tar.gz/.deb rebuilt,
   both checksum checks passed, and both PNG variants verified in the archive.
+
+Black backgrounds with orange controls (2026-11-01):
+
+- Changed the Orange palette to black window, input/table, alternate-row and
+  idle-button backgrounds with white text and neutral grey borders. Orange is
+  reserved for selection, checked/pressed controls, tab accents and progress/
+  slider highlights. Theme migration and logo variants are unchanged.
+- Full Python/Qt suite: 188 passed, 14 skipped. Ruff check/format passed. Qt
+  regression assertions verify black Window/Base roles and the orange highlight;
+  an offscreen rendering was inspected. No Windows software was installed.
+- Linux portable archive and Debian package rebuilt; both SHA256 checks passed.
