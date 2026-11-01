@@ -76,8 +76,9 @@ metadata and desired route delays; Export measurement writes reviewed JSON metad
 The full Windows acoustic path still requires target-machine build/hardware testing.
 
 Settings defaults to Orange: black backgrounds with orange selections, active
-buttons and control highlights, plus System/White/Dark/Lime/Blue/Violet alternatives
-and density controls. This branding update switches existing installations to Orange
+buttons and control highlights, plus System/White/Dark/Lime/Blue/Violet alternatives.
+Navigation icons follow the selected theme, with contrasting icons on active buttons.
+Settings also provides density controls. This branding update switches existing installations to Orange
 once; subsequent theme choices are preserved. Application and packaging icons use
 only the orbital-A mark from the supplied PNG. README branding retains the full
 wordmark. Windows ICO sizes preserve the mark’s proportions. Diagnostics contains

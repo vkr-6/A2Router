@@ -215,3 +215,15 @@ Black backgrounds with orange controls (2026-11-01):
   regression assertions verify black Window/Base roles and the orange highlight;
   an offscreen rendering was inspected. No Windows software was installed.
 - Linux portable archive and Debian package rebuilt; both SHA256 checks passed.
+
+Themed navigation-button icons (2026-11-01):
+
+- Navigation icons now use theme accent colours instead of the original coloured
+  system artwork. Checked buttons use the contrasting selected-text colour;
+  disabled icons use the disabled text colour. Transparent masks retain the
+  original shapes, with 1x/2x/3x pixmaps for display scaling. Brand assets remain.
+- Full Python/Qt suite: 188 passed, 14 skipped. Ruff check/format and diff checks
+  passed. Offscreen Qt rendering inspected; all six navigation icons checked
+  against their idle/selected palette colours through Orange/Blue/White/Orange
+  switches. No Windows installation or changes were performed.
+- Linux portable archive and Debian package rebuilt; both SHA256 checks passed.

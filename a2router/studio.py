@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QPalette
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -64,7 +64,8 @@ class Navigation(QWidget):
             QStyle.SP_MessageBoxInformation,
             QStyle.SP_FileDialogDetailedView,
         ]
-        button.setIcon(self.style().standardIcon(icons[len(self.buttons) % len(icons)]))
+        button.source_icon = self.style().standardIcon(icons[len(self.buttons) % len(icons)])
+        button.setIcon(button.source_icon)
         button.setIconSize(QSize(18, 18))
         button.setMinimumHeight(48)
         self.group.addButton(button, len(self.buttons))
@@ -84,6 +85,31 @@ class Navigation(QWidget):
 
     def currentRow(self):
         return self.row
+
+    def update_icons(self, palette):
+        """Tint the original icon masks, including checked and high-DPI variants."""
+        for button in self.buttons:
+            icon = QIcon()
+            for mode in (QIcon.Normal, QIcon.Active, QIcon.Disabled):
+                for state in (QIcon.Off, QIcon.On):
+                    color = (
+                        palette.color(QPalette.Disabled, QPalette.Text)
+                        if mode == QIcon.Disabled
+                        else palette.color(
+                            QPalette.HighlightedText if state == QIcon.On else QPalette.Highlight
+                        )
+                    )
+                    for scale in (1, 2, 3):
+                        pixels = QPixmap(button.iconSize() * scale)
+                        pixels.fill(Qt.transparent)
+                        painter = QPainter(pixels)
+                        button.source_icon.paint(painter, pixels.rect())
+                        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+                        painter.fillRect(pixels.rect(), color)
+                        painter.end()
+                        pixels.setDevicePixelRatio(scale)
+                        icon.addPixmap(pixels, mode, state)
+            button.setIcon(icon)
 
     def setCurrentRow(self, index):
         if 0 <= index < len(self.buttons):
@@ -621,6 +647,7 @@ class Studio:
         from a2router.themes import apply_theme
 
         apply_theme(self.window, self.theme.currentText(), self.density.currentText())
+        self.window.navigation.update_icons(self.window.palette())
         self.settings.setValue("theme", self.theme.currentText())
         self.settings.setValue("density", self.density.currentText())
 
