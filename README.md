@@ -22,8 +22,10 @@ Developed with **OpenAI Codex** under the project owner's direction.
 - **Calibration:** microphone-assisted sequential chirps, repeated-pass correlation,
   confidence/spread, cancellation and reviewed compensation. Measurement does not
   automatically apply delays. Native Windows playback/capture needs hardware testing.
-- **Diagnostics:** actual backend observations, action/error log and reviewed export.
-- **Settings:** Black with orange accents by default, plus White, Dark, Lime, Blue, Violet and system-following themes.
+- **Settings → Appearance:** the single place to select the theme and interface density.
+  The default Orange theme uses charcoal panels, orange accents and original outline icons;
+  White, Dark, Lime, Blue, Violet and system-following alternatives remain available.
+  The Diagnostics workspace and its GUI export/log actions have been removed.
   Profiles appear only in **File** (New/Open/Save/Save As/Recent profiles).
 
 ![Routing](docs/images/clean-routing.png)

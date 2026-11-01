@@ -7,7 +7,7 @@ from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import QApplication
 
 THEMES = {
-    "Orange": ("#000000", "#000000", "#000000", "#f5f5f5", "#000000", "#333333", "#ff9600"),
+    "Orange": ("#242424", "#191919", "#202020", "#e6e6e6", "#303030", "#454545", "#ff9600"),
     "White": ("#ffffff", "#ffffff", "#f4f6f8", "#161b22", "#f0f2f5", "#d1d7de", "#3157c8"),
     "Dark": ("#141618", "#1b1e21", "#22262a", "#edf0f2", "#262a2f", "#383e45", "#a9db4e"),
     "Lime": ("#111811", "#19221a", "#202d21", "#eff8e9", "#253527", "#3e5140", "#c2ef62"),
@@ -50,6 +50,7 @@ def apply_theme(window, name, density):
     window.setPalette(palette)
     window.setFont(QFont("Segoe UI" if sys.platform == "win32" else "DejaVu Sans", 9))
     padding = 2 if density == "Extra compact" else 4
+    hover = QColor(button).lighter(120).name()
     window.setStyleSheet(f"""
         QWidget {{ background: {bg}; color: {text}; }}
         QMenuBar, QMenu, QToolBar, QStatusBar {{ background: {bg}; color: {text}; }}
@@ -66,6 +67,12 @@ def apply_theme(window, name, density):
         QPushButton:checked, QToolButton:checked {{ background: {accent}; color: {selected_text}; }}
         QPushButton:pressed, QToolButton:pressed {{ background: {accent}; color: {selected_text}; }}
         QToolButton {{ padding: 2px 10px; }}
+        QToolButton#NavigationButton {{ background: {bg}; color: {text}; border: 0;
+            border-bottom: 2px solid transparent; border-radius: 0; padding: 3px 12px; }}
+        QToolButton#NavigationButton:hover {{ background: {hover}; border-bottom-color: {border}; }}
+        QToolButton#NavigationButton:checked, QToolButton#NavigationButton:pressed {{
+            background: {button}; color: {accent}; border-bottom-color: {accent}; }}
+        QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {{ border-color: {accent}; }}
         QWidget:disabled {{ color: {muted}; }}
         QHeaderView::section {{ background: {button}; color: {text}; border: 0; padding: 5px; }}
         QTreeView::item {{ padding: {padding}px 3px; }}

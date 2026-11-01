@@ -227,3 +227,27 @@ Themed navigation-button icons (2026-11-01):
   against their idle/selected palette colours through Orange/Blue/White/Orange
   switches. No Windows installation or changes were performed.
 - Linux portable archive and Debian package rebuilt; both SHA256 checks passed.
+
+Unified Appearance preferences and charcoal navigation (2026-11-01):
+
+- Removed the duplicate View-menu Theme chooser. Settings → Appearance now owns
+  the single theme selector and density control, in a compact top-aligned panel.
+  Existing profile formats and persisted theme preferences are unchanged.
+- Orange now uses neutral charcoal window/panel surfaces, darker table/input
+  surfaces and orange selection/focus/tab accents. Navigation buttons have
+  subtle charcoal active backgrounds with orange text/underlines.
+- Replaced filled standard system icons with original Qt-painted outlines for
+  routing, mixer faders, devices, microphone calibration and settings. Idle icons
+  are neutral, active icons use the accent, disabled icons use muted text, and
+  1x/2x/3x variants retain open transparent centres. No external artwork was copied.
+- Completely removed the Diagnostics GUI workspace, its widgets, GUI event log
+  and export actions. Backend health data/status-bar errors and existing CLI
+  diagnostics remain available for routing reliability.
+- Full Python/Qt suite: 189 passed, 14 skipped. Workspace tests: 20 passed,
+  including the single-selector/no-Diagnostics and outline-icon regressions.
+  Ruff check/format and diff checks passed. Updated routing/mixer screenshots
+  use the explicitly simulated backend, and the compact Appearance panel was
+  rendered and inspected at 1366×768. No Windows installation or changes.
+- Linux portable archive and Debian package rebuilt, packaged GUI smoke passed,
+  both PNG logo variants are included and both SHA256 checks passed. Windows
+  binaries still require the manual workflow; no native Windows build was run.

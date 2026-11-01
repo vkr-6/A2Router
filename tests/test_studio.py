@@ -78,12 +78,22 @@ def test_workspace_navigation_and_real_transport_actions(app):
             "Mixer",
             "Devices",
             "Calibration",
-            "Diagnostics",
             "Settings",
         ]
         assert all(
             button.toolButtonStyle() == Qt.ToolButtonTextUnderIcon for button in window.navigation.buttons
         )
+        view_menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "View")
+        assert "Theme" not in {a.text() for a in view_menu.actions()}
+        assert "Diagnostics" not in {a.text() for a in view_menu.actions()}
+        assert not hasattr(window, "diagnostics")
+        assert not hasattr(window.studio, "export_diagnostics")
+        from PySide6.QtWidgets import QComboBox
+
+        assert [combo for combo in window.findChildren(QComboBox) if combo.findText("Orange") >= 0] == [
+            window.studio.theme
+        ]
+        assert window.studio.theme.parentWidget().title() == "Appearance"
         assert window.navigation.height() <= 58 or not window.isVisible()
         assert window.studio.delay_group.isAncestorOf(window.sync)
         window.studio.actions["stop"].trigger()
@@ -97,6 +107,36 @@ def test_workspace_navigation_and_real_transport_actions(app):
         assert not backend.resources and route.enabled
     finally:
         shutdown(app, window)
+
+
+def test_outline_navigation_icons_have_transparent_centres_and_theme_colours(app):
+    from PySide6.QtGui import QColor, QIcon, QPalette
+
+    from a2router.navigation_icons import navigation_icon
+
+    palette = QPalette()
+    palette.setColor(QPalette.ButtonText, QColor("#e6e6e6"))
+    palette.setColor(QPalette.Highlight, QColor("#ff9600"))
+    icon = navigation_icon("Settings", palette)
+    for state, expected in ((QIcon.Off, QColor("#e6e6e6")), (QIcon.On, QColor("#ff9600"))):
+        image = icon.pixmap(18, 18, QIcon.Normal, state).toImage()
+        assert image.pixelColor(9, 9).alpha() == 0
+        pixels = [
+            image.pixelColor(x, y)
+            for x in range(image.width())
+            for y in range(image.height())
+            if image.pixelColor(x, y).alpha() > 220
+        ]
+        assert pixels
+        assert all(
+            max(
+                abs(p.red() - expected.red()),
+                abs(p.green() - expected.green()),
+                abs(p.blue() - expected.blue()),
+            )
+            <= 1
+            for p in pixels
+        )
 
 
 def test_model_edits_backend_and_preserves_selection(app):
@@ -320,8 +360,8 @@ def test_theme_and_table_layout_survive_window_restart(app, tmp_path, monkeypatc
     wait(app, first)
     assert first.studio.theme.currentText() == "Orange"
     assert first.palette().color(QPalette.Highlight).name() == "#ff9600"
-    assert first.palette().color(QPalette.Window).name() == "#000000"
-    assert first.palette().color(QPalette.Base).name() == "#000000"
+    assert first.palette().color(QPalette.Window).name() == "#242424"
+    assert app.palette().color(QPalette.Base).name() == "#191919"
     assert settings.value("orangeBrandingV1", False, type=bool)
     first.studio.theme.setCurrentText("Dark")
     first.studio.output_table.view.setColumnWidth(0, 267)

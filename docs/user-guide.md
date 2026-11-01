@@ -75,14 +75,16 @@ it does not undo already applied engine delays. File → Save stores calibration
 metadata and desired route delays; Export measurement writes reviewed JSON metadata.
 The full Windows acoustic path still requires target-machine build/hardware testing.
 
-Settings defaults to Orange: black backgrounds with orange selections, active
-buttons and control highlights, plus System/White/Dark/Lime/Blue/Violet alternatives.
-Navigation icons follow the selected theme, with contrasting icons on active buttons.
-Settings also provides density controls. This branding update switches existing installations to Orange
+Settings → Appearance is the only theme selector. Orange uses neutral charcoal
+panels, darker tables and subtle orange selections/underlines, plus
+System/White/Dark/Lime/Blue/Violet alternatives. Original outline navigation icons
+use neutral text colour when idle and the theme accent when active. Settings also
+provides density controls. This branding update switches existing installations to Orange
 once; subsequent theme choices are preserved. Application and packaging icons use
 only the orbital-A mark from the supplied PNG. README branding retains the full
-wordmark. Windows ICO sizes preserve the mark’s proportions. Diagnostics contains
-backend observations and logs; export prompts for review of IDs/names/library paths.
+wordmark. Windows ICO sizes preserve the mark’s proportions. The Diagnostics page
+and GUI export/log controls have been removed. Backend errors remain visible in
+the status bar, and existing command-line diagnostics are still available.
 
 Shortcuts: Ctrl+N/Open Ctrl+O/Save Ctrl+S/Save As Ctrl+Shift+S, refresh Ctrl+R/F5,
 filter Ctrl+F, emergency Ctrl+Shift+M, help F1. Closing hides/minimizes; File → Exit

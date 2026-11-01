@@ -418,7 +418,6 @@ def test_clean_workspace_removes_showcase_and_profiles_outside_file(app):
             "Mixer",
             "Devices",
             "Calibration",
-            "Diagnostics",
             "Settings",
         ]
         assert [window.studio.routing_tabs.tabText(i) for i in range(window.studio.routing_tabs.count())] == [

@@ -661,9 +661,7 @@ class MainWindow(QMainWindow):
             )
         )
         if not capable:
-            layout.addWidget(
-                QLabel("Virtual-device creation is unavailable with this backend. See backend diagnostics.")
-            )
+            layout.addWidget(QLabel("Virtual-device creation is unavailable with this backend."))
 
     def _cable_selection_changed(self):
         device = self.view_devices.get(self.cable_endpoint.currentData(), {})
@@ -905,8 +903,6 @@ class MainWindow(QMainWindow):
 
     def _settings_page(self):
         layout = self.page("Settings")
-        self.diagnostics = QPlainTextEdit(self)
-        self.diagnostics.setReadOnly(True)
         hint = QLabel(
             "Closing the window keeps routes running. Use Exit A2Router to stop the Windows engine."
         )
@@ -981,7 +977,6 @@ class MainWindow(QMainWindow):
         if snapshot:
             self.populate(snapshot)
         backend_error = (snapshot or {}).get("diagnostics", {}).get("error")
-        self.studio.record(message or backend_error)
         if not background:
             self.error.setText(message or backend_error or self.backend.name)
             self._poll_error = ""
@@ -1250,7 +1245,6 @@ class MainWindow(QMainWindow):
                 state = "Unsupported definition: VB-CABLE uses shared endpoints"
             virtual_rows.append((config["id"], [config["name"], config["layout"], state, ident]))
         self._update_tree(self.virtual_tree, virtual_rows)
-        self._update_text(self.diagnostics, json.dumps(snapshot["diagnostics"], indent=2))
         self.studio.update(snapshot)
 
     def closeEvent(self, event):

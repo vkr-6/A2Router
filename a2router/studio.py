@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QIcon, QPainter, QPalette, QPixmap
+from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -18,11 +18,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QMenu,
     QMessageBox,
-    QPlainTextEdit,
-    QPushButton,
     QScrollArea,
     QSplitter,
-    QStyle,
     QTabWidget,
     QToolBar,
     QToolButton,
@@ -32,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from a2router import storage
 from a2router.controller import config_dir
+from a2router.navigation_icons import navigation_icon
 from a2router.tables import DeviceTable
 
 
@@ -55,17 +53,8 @@ class Navigation(QWidget):
         button.setText(title)
         button.setCheckable(True)
         button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        icons = [
-            QStyle.SP_ArrowRight,
-            QStyle.SP_MediaVolume,
-            QStyle.SP_ComputerIcon,
-            QStyle.SP_DriveNetIcon,
-            QStyle.SP_FileDialogContentsView,
-            QStyle.SP_MessageBoxInformation,
-            QStyle.SP_FileDialogDetailedView,
-        ]
-        button.source_icon = self.style().standardIcon(icons[len(self.buttons) % len(icons)])
-        button.setIcon(button.source_icon)
+        button.setObjectName("NavigationButton")
+        button.setIcon(navigation_icon(title, self.palette()))
         button.setIconSize(QSize(18, 18))
         button.setMinimumHeight(48)
         self.group.addButton(button, len(self.buttons))
@@ -87,29 +76,9 @@ class Navigation(QWidget):
         return self.row
 
     def update_icons(self, palette):
-        """Tint the original icon masks, including checked and high-DPI variants."""
+        """Render outlined navigation symbols for the active palette."""
         for button in self.buttons:
-            icon = QIcon()
-            for mode in (QIcon.Normal, QIcon.Active, QIcon.Disabled):
-                for state in (QIcon.Off, QIcon.On):
-                    color = (
-                        palette.color(QPalette.Disabled, QPalette.Text)
-                        if mode == QIcon.Disabled
-                        else palette.color(
-                            QPalette.HighlightedText if state == QIcon.On else QPalette.Highlight
-                        )
-                    )
-                    for scale in (1, 2, 3):
-                        pixels = QPixmap(button.iconSize() * scale)
-                        pixels.fill(Qt.transparent)
-                        painter = QPainter(pixels)
-                        button.source_icon.paint(painter, pixels.rect())
-                        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
-                        painter.fillRect(pixels.rect(), color)
-                        painter.end()
-                        pixels.setDevicePixelRatio(scale)
-                        icon.addPixmap(pixels, mode, state)
-            button.setIcon(icon)
+            button.setIcon(navigation_icon(button.text(), palette))
 
     def setCurrentRow(self, index):
         if 0 <= index < len(self.buttons):
@@ -125,9 +94,6 @@ class Studio:
         self.profile_path = None
         self.saved_fingerprint = None
         self.last_fingerprint = None
-        self.events = []
-        self.last_event = None
-        self.system_palette = QPalette(QApplication.style().standardPalette())
         self.routing_tabs = QTabWidget()
         # Retain existing pages and their real action wiring, then compose the new workspace.
         mixer, devices, routing, virtual, sync, settings = [w.tabs.widget(i) for i in range(6)]
@@ -199,24 +165,8 @@ class Studio:
         calibration.setWidgetResizable(True)
         calibration.setFrameShape(QFrame.NoFrame)
         calibration.setWidget(self.calibration_panel)
-        diagnostics = QWidget()
-        box = QVBoxLayout(diagnostics)
-        box.setContentsMargins(0, 0, 0, 0)
-        box.addWidget(w.diagnostics)
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setMaximumBlockCount(2000)
-        box.addWidget(self.log)
-        row = QHBoxLayout()
-        export = QPushButton("Export diagnostics…")
-        export.clicked.connect(self.export_diagnostics)
-        row.addWidget(export)
-        clear = QPushButton("Clear visible log")
-        clear.clicked.connect(self.clear_log)
-        row.addWidget(clear)
-        box.addLayout(row)
         # Preferences are separate from audio-profile JSON.
-        preferences = QGroupBox("Interface")
+        preferences = QGroupBox("Appearance")
         form = QFormLayout(preferences)
         self.theme = QComboBox()
         self.theme.addItems(["Orange", "System", "White", "Dark", "Lime", "Blue", "Violet"])
@@ -235,15 +185,9 @@ class Studio:
         self.density.setCurrentText(self.settings.value("density", "Compact"))
         self.density.currentTextChanged.connect(self.apply_theme)
         form.addRow("Density", self.density)
+        preferences.setMaximumWidth(520)
         settings.layout().insertWidget(0, preferences)
-        for index in reversed(range(settings.layout().count())):
-            item = settings.layout().itemAt(index)
-            if (
-                item.widget()
-                and isinstance(item.widget(), QGroupBox)
-                and item.widget().title() in ("Diagnostics", "Routing profiles")
-            ):
-                item.widget().hide()
+        settings.layout().addStretch(1)
         w.navigation.clear()
         for title, page in zip(
             (
@@ -251,10 +195,9 @@ class Studio:
                 "Mixer",
                 "Devices",
                 "Calibration",
-                "Diagnostics",
                 "Settings",
             ),
-            (self.routing_tabs, mixer, self.devices_page, calibration, diagnostics, settings),
+            (self.routing_tabs, mixer, self.devices_page, calibration, settings),
         ):
             w.tabs.addWidget(page)
             w.navigation.addItem(title)
@@ -310,15 +253,13 @@ class Studio:
             action = QAction(title, w)
             if shortcut:
                 action.setShortcut(shortcut)
-            action.triggered.connect(
-                lambda checked=False, operation=callback, label=title: self.invoke(label, operation)
-            )
+            action.triggered.connect(lambda checked=False, operation=callback: operation())
             if key in ("start", "stop", "emergency"):
                 action.setEnabled(w.backend.capabilities().get("routing", False))
                 action.setToolTip(
                     "Controls only A2Router-managed audio streams"
                     if action.isEnabled()
-                    else "Routing is unavailable; inspect backend diagnostics"
+                    else "Routing is unavailable with this backend"
                 )
             self.actions[key] = action
             w.addAction(action)
@@ -329,10 +270,6 @@ class Studio:
         w.removeToolBar(bar)
         w.centralWidget().layout().insertWidget(1, bar)
         bar.show()
-
-    def invoke(self, title, callback):
-        self.record(f"Requested: {title}")
-        callback()
 
     def menus(self):
         w = self.window
@@ -353,14 +290,6 @@ class Studio:
             menus["View"].addAction(
                 button.text(), lambda checked=False, i=index: w.navigation.setCurrentRow(i)
             )
-        themes = menus["View"].addMenu("Theme")
-        group = QActionGroup(w)
-        for name in ("System", "White", "Dark", "Lime", "Blue", "Violet"):
-            action = themes.addAction(name)
-            action.setCheckable(True)
-            action.setChecked(name == self.theme.currentText())
-            action.triggered.connect(lambda checked=False, value=name: self.theme.setCurrentText(value))
-            group.addAction(action)
         for key in ("start", "stop", "emergency"):
             menus["Routing"].addAction(self.actions[key])
         for title, method in (
@@ -383,7 +312,6 @@ class Studio:
         for action in (sound, mixer):
             action.setEnabled(sys.platform == "win32")
             action.setToolTip("Requires Windows")
-        menus["Tools"].addAction("Export diagnostics…", self.export_diagnostics)
         menus["Help"].addAction(
             "User guide",
             lambda: QDesktopServices.openUrl(
@@ -526,62 +454,6 @@ class Studio:
                 if item.data(0, Qt.UserRole) == selected:
                     self.window.device_tree.setCurrentItem(item)
                     break
-
-    def export_diagnostics(self):
-        if (
-            QMessageBox.question(
-                self.window,
-                "Review diagnostics",
-                "This export includes device names, stable IDs, native library paths and route errors. Review the Diagnostics page before sharing. Export?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            != QMessageBox.Yes
-        ):
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self.window, "Export diagnostics", "a2router-diagnostics.json", "JSON (*.json)"
-        )
-        if path:
-            payload = self.window.diagnostics.toPlainText()
-            events = list(self.events)
-
-            def write():
-                # Reuse the atomic writer for arbitrary support data without changing profile validation.
-                import os
-                import tempfile
-
-                temporary = None
-                try:
-                    with tempfile.NamedTemporaryFile(
-                        "w", encoding="utf-8", dir=Path(path).parent, delete=False
-                    ) as stream:
-                        temporary = stream.name
-                        json.dump({"diagnostics": json.loads(payload), "events": events}, stream, indent=2)
-                        stream.flush()
-                        os.fsync(stream.fileno())
-                    os.replace(temporary, path)
-                finally:
-                    if temporary and os.path.exists(temporary):
-                        os.unlink(temporary)
-                return "Diagnostics exported"
-
-            self.window.submit(write, persist=False, refresh_backend=False)
-
-    def clear_log(self):
-        self.events.clear()
-        self.last_event = None
-        self.log.clear()
-
-    def record(self, message):
-        if message and message != self.last_event:
-            from datetime import datetime, timezone
-
-            line = f"{datetime.now(timezone.utc).isoformat(timespec='seconds')}  {message}"
-            self.events.append(line)
-            self.events = self.events[-2000:]
-            self.log.appendPlainText(line)
-            self.last_event = message
 
     def update(self, snapshot):
         self.matrix.refresh()
