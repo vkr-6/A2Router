@@ -52,6 +52,14 @@ def test_server_layouts_fanout_mixing_restore_cleanup(tmp_path):
             definitions.append(config)
             backend.create_virtual_device(config)
         source_b, output_a, output_b = definitions[-3:]
+        backend.set_device_volume(output_b.device_id, 0.3333)
+        assert backend.get_device(output_b.device_id).properties["controls"]["volume"] == pytest.approx(
+            0.3333, abs=1 / 65536
+        )
+        backend.set_device_mute(output_b.device_id, True)
+        assert backend.get_device(output_b.device_id).properties["controls"]["muted"] is True
+        backend.set_device_mute(output_b.device_id, False)
+        backend.set_device_volume(output_b.device_id, 1.0)
         routes = [
             backend.create_route(monitor(s), d.device_id)
             for s, d in ((stereo, output_a), (stereo, output_b), (source_b, output_a))
@@ -59,6 +67,13 @@ def test_server_layouts_fanout_mixing_restore_cleanup(tmp_path):
         for r in routes:
             assert r.status == "connected", r.error
             assert len(r.resource_ids) == 1
+        if backend.capabilities().get("route_delay"):
+            other_resources = [list(route.resource_ids) for route in routes[1:]]
+            with pytest.raises(BackendError, match="restarting"):
+                backend.set_route_delay(routes[0].id, 20)
+            backend.set_route_delay(routes[0].id, 20, allow_restart=True)
+            assert routes[0].delay_ms == 20 and routes[0].status == "connected"
+            assert [route.resource_ids for route in routes[1:]] == other_resources
         for route in routes:
             backend.disable_route(route.id)
             backend.disable_route(route.id)

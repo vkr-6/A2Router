@@ -36,7 +36,9 @@ draft; Add route or Apply to selected route performs the operation. Existing-rou
 changes warn about a source restart and attempt rollback on backend failure.
 
 Downmix to stereo uses front channels plus attenuated centre/surround contributions,
-excludes LFE and normalizes for coherent full-scale headroom. Mono downmix also
+excludes LFE and keeps front channels at unity by default. Choose −3 dB headroom
+or Normalize peaks for more conservative summing. Normalization is quieter by
+design. Reload and apply a preset to change an existing matrix. Mono downmix also
 excludes LFE. Stereo upmix copies fronts, derives centre at 0.5 L + 0.5 R, and uses
 attenuated copies for surround pairs; LFE stays silent. This is stereo expansion,
 not recovered discrete surround. Conversion uses reported positions, never guessed
@@ -73,7 +75,7 @@ metadata and desired route delays; Export measurement writes reviewed JSON metad
 The full Windows acoustic path still requires target-machine build/hardware testing.
 
 Settings offers System/White/Dark/Lime/Blue/Violet and density. The new A-squared logo
-uses a simple blue routing monogram with a transparent background. Diagnostics contains
+uses the supplied white/orange orbital-A design as clean transparent vector assets. Diagnostics contains
 backend observations and logs; export prompts for review of IDs/names/library paths.
 
 Shortcuts: Ctrl+N/Open Ctrl+O/Save Ctrl+S/Save As Ctrl+Shift+S, refresh Ctrl+R/F5,
@@ -113,3 +115,18 @@ recording anchor remains a real microphone timestamp. Invalid timestamps or lost
 packets during the subsequent measurement still reject the pass. If this persists,
 close other microphone applications, disable microphone enhancements, and try a
 wired/USB microphone, especially when measuring Bluetooth playback.
+
+### Cable control scope
+
+Mixer → Cable volume selects routed playback gain or the Windows playback endpoint.
+The latter follows external Windows volume/mute changes and can be used without an
+A2Router route. Both stages can affect the final level; scope selection changes
+which control is edited, not the other stage's stored value. VB-CABLE panel… opens
+the hash-verified official control panel. Enable Windows Volume Control in its
+menu if Windows' slider has no effect. This vendor option is not changed by the
+app and has not been tested on Windows hardware in this revision.
+
+Windows' taskbar slider controls the selected Windows playback endpoint. Select
+the cable there yourself if that is the endpoint you intend to adjust; A2Router
+never changes the Windows default output implicitly. Windows per-application
+session gain and mute can also affect shared playback independently of route gain.

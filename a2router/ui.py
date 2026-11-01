@@ -181,6 +181,17 @@ class MainWindow(QMainWindow):
         layout = self.page("Audio")
         self.dashboard = Dashboard(self.change_device_volume, self.change_device_mute)
         layout.addWidget(self.dashboard, 1)
+        if hasattr(self.backend, "set_cable_control_mode"):
+            controls = QHBoxLayout()
+            controls.addWidget(QLabel("Cable volume"))
+            self.cable_volume_scope = QComboBox()
+            self.cable_volume_scope.addItem("A2Router routed playback", "routes")
+            self.cable_volume_scope.addItem("Windows playback endpoint", "endpoint")
+            self.cable_volume_scope.currentIndexChanged.connect(self.change_cable_scope)
+            controls.addWidget(self.cable_volume_scope)
+            self.button(controls, "VB-CABLE panel…", self.open_cable_panel)
+            controls.addStretch()
+            layout.addLayout(controls)
         actions = QHBoxLayout()
         layout.addLayout(actions)
         self.button(
@@ -196,6 +207,10 @@ class MainWindow(QMainWindow):
             self.backend.capabilities()["routing"],
         )
         actions.addStretch()
+
+    def change_cable_scope(self):
+        mode = self.cable_volume_scope.currentData()
+        self.submit(lambda: self.backend.set_cable_control_mode(mode), persist=False, refresh_backend=False)
 
     def change_device_volume(self, device_id, volume):
         self.submit(lambda: self.backend.set_device_volume(device_id, volume), refresh_backend=False)
@@ -557,6 +572,7 @@ class MainWindow(QMainWindow):
             )
             self.apply_format_button.setObjectName("Primary")
             self.button(actions, "Windows Sound…", self.configure_windows_cable)
+            self.button(actions, "VB-CABLE panel…", self.open_cable_panel)
             actions.addStretch()
             form.addRow(actions)
             layout.addWidget(group)
@@ -683,6 +699,11 @@ class MainWindow(QMainWindow):
         name = self.virtual_name.text().strip() or "VB-CABLE"
         self.submit(lambda: self.backend.configure_cable(name))
 
+    def open_cable_panel(self):
+        from a2router.backends import windows_vbcable
+
+        self.submit(windows_vbcable.open_driver_configuration, persist=False, refresh_backend=False)
+
     def configure_windows_cable(self):
         from a2router.backends import windows_vbcable
 
@@ -728,7 +749,13 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         row.addWidget(QLabel("Route"))
         row.addWidget(self.sync_route, 1)
-        row.addWidget(QLabel("Additional delay"))
+        row.addWidget(
+            QLabel(
+                "Server latency target"
+                if self.backend.capabilities().get("latency_control")
+                else "Additional delay"
+            )
+        )
         row.addWidget(self.sync_delay)
         layout.addLayout(row)
         self.sync_restart = QCheckBox("Allow a source restart if the current buffer cannot hold this delay")
@@ -816,7 +843,9 @@ class MainWindow(QMainWindow):
         if ident:
 
             def apply():
-                self.backend.set_route_delay(ident, delay, allow_restart=restart)
+                result = self.backend.set_route_delay(ident, delay, allow_restart=restart)
+                if isinstance(result, str):
+                    return result
                 return f"Requested {delay} ms additional delay; see route status and buffering below."
 
             self.submit(apply)

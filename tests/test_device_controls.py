@@ -328,3 +328,45 @@ def test_saved_format_with_unchanged_active_mix_reports_pending_state():
     message = backend.configure_device_format("cable-out", FORMATS[-1])
     assert "active mix format has not changed" in message
     assert backend.get_device("cable-out").channels == 2
+
+
+def test_cable_endpoint_scope_reads_windows_changes_without_altering_route_gain():
+    bridge = StreamBridge()
+    backend = WindowsBackend(bridge)
+    backend.refresh()
+    route = backend.create_route("cable-out", "headphones")
+    backend.set_route_volume(route.id, 0.6)
+    backend.set_cable_control_mode("endpoint")
+    backend.set_device_volume("cable-out", 0.35)
+    assert bridge.volume == 0.35 and route.volume == 0.6
+    assert backend.get_device("cable-out").properties["controls"]["volume"] == 0.35
+    bridge.volume = 0.75  # External Windows sound control change.
+    backend.poll_controls()
+    assert backend.get_device("cable-out").properties["controls"]["volume"] == 0.75
+    backend.set_device_mute("cable-out", True)
+    assert bridge.muted and not route.muted
+    backend.set_cable_control_mode("routes")
+    assert backend.get_device("cable-out").properties["controls"]["volume"] == 0.6
+
+
+def test_vendor_panel_is_hash_verified_and_never_runs_setup(tmp_path, monkeypatch):
+    import zipfile
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from a2router.backends import windows_vbcable
+
+    source = Path(__file__).resolve().parents[1] / "vendor/vbcable/VBCABLE_Driver_Pack45.zip"
+    panel = tmp_path / "VBCABLE_ControlPanel.exe"
+    with zipfile.ZipFile(source) as archive:
+        panel.write_bytes(archive.read(panel.name))
+    monkeypatch.setattr(windows_vbcable, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(windows_vbcable, "payload_directory", lambda: tmp_path)
+    launches = []
+    monkeypatch.setattr(windows_vbcable.subprocess, "Popen", lambda args, **kwargs: launches.append(args))
+    assert "Windows Volume Control" in windows_vbcable.open_driver_configuration()
+    assert launches == [[str(panel)]]
+    panel.write_bytes(b"tampered")
+    with pytest.raises(BackendError, match="differs"):
+        windows_vbcable.open_driver_configuration()
+    assert len(launches) == 1

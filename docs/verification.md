@@ -97,3 +97,34 @@ Monitoring confirmation, capture settling and transparent branding (2026-10-29):
 - Full Linux Python/Qt suite: 169 passed, 13 skipped. Ruff check/format passed.
   Both SVGs rendered through Qt with transparent corners verified; Windows ICO
   generated on Linux. No Windows installation or hardware test was performed.
+
+Branding, volume scope, conversion levels and Linux latency (2026-11-01):
+
+- Recreated the supplied logo.jpeg design as clean white/orange vector source
+  assets, with transparent backgrounds. Qt SVG rendering and Windows ICO
+  generation passed on Linux; the prior raster cutout attempts were discarded.
+- Windows Mixer now distinguishes routed playback gain from the Windows cable
+  playback endpoint. Endpoint mode observes external changes without changing
+  route gain. The official VB-CABLE control panel is hash-verified before launch;
+  this action does not run setup or modify driver settings.
+- The vendor's reference manual documents that Windows Volume Control must be
+  enabled in the VB-CABLE panel for Windows' playback slider to affect audio.
+  This setting cannot be inferred from endpoint scalar readback. Actual Windows
+  driver/audio behavior remains unverified; no Windows software was installed.
+- Downmix defaults to front-channel unity with attenuated centre/surround
+  contributions and LFE excluded. Optional -3 dB headroom or conservative peak
+  normalization is selectable. Mono summing uses explicit coefficients. Existing
+  custom matrices are not migrated; reload and apply a preset to change them.
+  Loud summed peaks can still clip at the native clamp; use headroom as needed.
+- Linux device volume/mute now checks native server readback. PipeWire 1.0+
+  latency targets require explicit per-route restart permission and remain server
+  buffering requests, not acoustic alignment. Older servers capability-gate them.
+  Linux custom matrices, per-route gain and acoustic calibration remain absent.
+- Full Python/Qt suite: 174 passed, 13 skipped. Native GNU C++20 PCM tests passed.
+  Ruff check/format and git diff checks passed.
+- Real private PipeWire 1.0.5 integration: 3 passed, covering volume/mute readback,
+  latency request/restoration, fan-out/mixing with PCM, GUI, daemon restart and
+  cleanup. No physical speaker/microphone path was tested.
+- Linux tar.gz and .deb rebuilt. Extracted portable GUI/FFT smoke (explicit mock)
+  passed with PYTHONPATH removed; current logo verified; both SHA256 checks passed.
+  This local runtime uses Ubuntu 24.04/glibc 2.39. Windows rebuild requires CI.

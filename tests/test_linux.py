@@ -236,7 +236,7 @@ def test_device_master_controls_use_native_server_commands(server):
     def runner(args):
         if args[0] == "set-sink-volume":
             calls.append(args)
-            value = round(int(args[2].removesuffix("%")) / 100 * 65536)
+            value = int(args[2])
             server.sinks[0]["volume"] = {"front-left": {"value": value}, "front-right": {"value": value}}
             return ""
         if args[0] == "set-source-mute":
@@ -250,7 +250,7 @@ def test_device_master_controls_use_native_server_commands(server):
     assert backend.get_device("sink:sink").properties["controls"]["volume"] == 0.75
     backend.set_device_volume("sink:sink", 0.4)
     backend.set_device_mute("source:mic", True)
-    assert calls == [["set-sink-volume", "sink", "40%"], ["set-source-mute", "mic", "1"]]
+    assert calls == [["set-sink-volume", "sink", "26214"], ["set-source-mute", "mic", "1"]]
     assert backend.get_device("source:mic").properties["controls"]["muted"] is True
     assert not backend.capabilities()["meters"]
 

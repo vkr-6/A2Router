@@ -33,6 +33,7 @@ class WindowsBackend(AudioBackend):
         self.active_delays = {}
         self.active_matrices = {}
         self.format_cache = {}
+        self.cable_control_mode = "routes"
         self._calibration_cancel = threading.Event()
         self.has_matrix_api = bridge is not None and hasattr(bridge, "ar_source_start_matrix")
         self.has_live_delay_api = bridge is not None and hasattr(bridge, "ar_source_set_delay")
@@ -227,6 +228,7 @@ class WindowsBackend(AudioBackend):
                 if ident in self.format_cache:
                     properties["supported_formats"] = self.format_cache[ident]
                 if properties.get("controls"):
+                    properties["endpoint_controls"] = dict(properties["controls"])
                     properties["controls"]["observed_at"] = time.monotonic()
                 devices[ident] = Device(ident, name, kind, positions=positions, state="ACTIVE", **row)
                 if kind == "output":
@@ -534,9 +536,23 @@ class WindowsBackend(AudioBackend):
             and self.devices[r.source_id].properties.get("feedback_group") == group
         ]
 
+    def set_cable_control_mode(self, mode):
+        if mode not in ("routes", "endpoint"):
+            raise BackendError("Unknown cable volume scope")
+        self.cable_control_mode = mode
+        self._update_cable_controls()
+        return "Cable controls: " + ("routed playback" if mode == "routes" else "Windows playback endpoint")
+
     def _update_cable_controls(self):
         for device in self.devices.values():
             if device.properties.get("virtual_driver") != "VB-CABLE":
+                continue
+            if self.cable_control_mode == "endpoint":
+                target = self.devices.get(device.monitor_of, device)
+                device.properties["controls"] = {
+                    **target.properties.get("endpoint_controls", {}),
+                    "scope": "Windows cable endpoint; enable Windows Volume Control in the VB-CABLE panel",
+                }
                 continue
             routes = self._cable_routes(device)
             common = {(r.volume, r.muted) for r in routes}
@@ -588,6 +604,7 @@ class WindowsBackend(AudioBackend):
         for row in json.loads(payload):
             device = self.devices.get(row["id"])
             if device:
+                device.properties["endpoint_controls"] = dict(row["controls"])
                 device.properties["controls"] = {**row["controls"], "observed_at": time.monotonic()}
         self._update_cable_controls()
 
@@ -596,24 +613,33 @@ class WindowsBackend(AudioBackend):
             raise BackendError("Volume must be between 0 and 1")
         device = self.get_device(device_id)
         if device.properties.get("virtual_driver") == "VB-CABLE":
-            return self._set_cable_controls(device, volume=volume)
+            if self.cable_control_mode == "routes":
+                return self._set_cable_controls(device, volume=volume)
+            device_id = device.monitor_of or device_id
         if not self.capabilities()["device_controls"] or not self.bridge.ar_set_device_volume(
             device_id, volume
         ):
             raise BackendError(self._error() if self.bridge else "Device controls unavailable")
         self.poll_controls()
+        actual = self.get_device(device_id).properties.get("endpoint_controls", {}).get("volume")
+        if type(actual) not in (int, float) or abs(actual - volume) > 0.002:
+            raise BackendError("Windows endpoint volume readback did not confirm the change")
 
     def set_device_mute(self, device_id, muted):
         device = self.get_device(device_id)
         if type(muted) is not bool:
             raise BackendError("Mute must be a boolean")
         if device.properties.get("virtual_driver") == "VB-CABLE":
-            return self._set_cable_controls(device, muted=muted)
+            if self.cable_control_mode == "routes":
+                return self._set_cable_controls(device, muted=muted)
+            device_id = device.monitor_of or device_id
         if not self.capabilities()["device_controls"] or not self.bridge.ar_set_device_mute(
             device_id, int(muted)
         ):
             raise BackendError(self._error() if self.bridge else "Device controls unavailable")
         self.poll_controls()
+        if self.get_device(device_id).properties.get("endpoint_controls", {}).get("muted") is not muted:
+            raise BackendError("Windows endpoint mute readback did not confirm the change")
 
     def inspect_formats(self, device_id):
         self.get_device(device_id)

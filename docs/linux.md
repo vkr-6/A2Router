@@ -28,3 +28,17 @@ sink names using a compatible quoting path. Names containing both single and
 double quotes, or backslashes, cannot be represented faithfully on that version
 and are rejected before creating a resource. Use a simpler name or upgrade
 PipeWire. Ownership verification and cleanup still apply.
+
+### Latency targets and device controls
+
+PipeWire 1.0+ supports a per-route loopback latency target. The app exposes it as
+a server latency target, validates the module arguments and stream connections,
+and requires explicit permission before restarting an active route. Other routes
+are retained. Zero restores the server default. This request does not measure or
+guarantee an exact acoustic delay. Earlier PipeWire and native PulseAudio servers
+keep this control unavailable.
+
+Endpoint gain uses Pulse's native 16.16 volume units and verifies the server's
+readback. Mute is also read back. Linux custom channel matrices, per-route gain,
+acoustic calibration and hardware-format editing are not implemented. Unsupported
+controls remain gated; Windows functionality is not used as evidence of Linux parity.

@@ -128,3 +128,21 @@ def open_configuration():
     subprocess.Popen(
         [str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/control.exe"), "mmsys.cpl", ",,0"]
     )
+
+
+def open_driver_configuration():
+    """Open only the verified vendor control panel, never the setup executable."""
+    if os.name != "nt":
+        raise BackendError("The VB-CABLE control panel is only available on Windows")
+    import hashlib
+
+    panel = payload_directory() / "VBCABLE_ControlPanel.exe"
+    if not panel.is_file():
+        raise BackendError("Extract the portable vendor folder to use the VB-CABLE control panel")
+    if (
+        hashlib.sha256(panel.read_bytes()).hexdigest()
+        != "f5b44706fe7ba2eed0516dee791f826dc7a9891e997f6ce9704e2899300b14ff"
+    ):
+        raise BackendError("VB-CABLE control panel differs from the verified vendor package")
+    subprocess.Popen([str(panel)], cwd=panel.parent)
+    return "In the VB-CABLE panel menu, enable Windows Volume Control for the Windows sound slider."

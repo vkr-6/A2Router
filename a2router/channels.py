@@ -26,13 +26,31 @@ def validate_channel_map(mapping, source_channels=None, destination_channels=Non
     return mapping
 
 
-def conversion_preset(name, source_positions, destination_positions):
-    """Explicit, normalized channel conversion using reported positions only.
+def conversion_preset(name, source_positions, destination_positions, *, level="preserve"):
+    """Explicit channel conversion using reported positions and selected headroom.
 
     The 5.1 fold-down uses ITU-R BS.775-style -3 dB centre/surround
     contributions. Additional 7.1 surround pairs are an explicit extension.
     LFE is intentionally excluded; no bass management is synthesized.
     """
+    if level not in ("preserve", "headroom", "normalize"):
+        raise BackendError("Unknown conversion level mode")
+
+    def finish(mapping):
+        scale = 10 ** (-3 / 20) if level == "headroom" else 1.0
+        if level == "normalize":
+            total = max(
+                (
+                    sum(abs(c["gain"]) for c in mapping if c["destination"] == output)
+                    for output in range(len(destination))
+                ),
+                default=1.0,
+            )
+            scale = 1 / max(1.0, total)
+        return validate_channel_map(
+            [{**c, "gain": c["gain"] * scale} for c in mapping], len(source), len(destination)
+        )
+
     aliases = {"back-left": "rear-left", "back-right": "rear-right", "low-frequency": "lfe"}
     source = [aliases.get(p, p) for p in source_positions]
     destination = [aliases.get(p, p) for p in destination_positions]
@@ -74,7 +92,7 @@ def conversion_preset(name, source_positions, destination_positions):
         for left, right in [("rear-left", "rear-right"), ("side-left", "side-right")]:
             add("front-left", left, 0.5)
             add("front-right", right, 0.5)
-        return validate_channel_map(matrix, len(source), len(destination))
+        return finish(matrix)
     mono = name == "Downmix to mono"
     if name not in ("Downmix to stereo", "Downmix to mono"):
         raise BackendError("Unknown conversion preset")
@@ -102,10 +120,12 @@ def conversion_preset(name, source_positions, destination_positions):
         if mono:
             coefficient = (
                 1.0
-                if position in ("front-center", "mono")
+                if position == "mono" or len(source) == 1
                 else math.sqrt(0.5)
-                if position.startswith("front-")
+                if position == "front-center"
                 else 0.5
+                if position in ("front-left", "front-right")
+                else math.sqrt(0.5) / 2
             )
             coefficients[(index, 0)] = coefficient
         else:
@@ -117,12 +137,5 @@ def conversion_preset(name, source_positions, destination_positions):
                 )
     if not coefficients:
         raise BackendError("No non-LFE source channels to mix")
-    headroom = max(
-        1.0,
-        max(
-            sum(abs(gain) for (src, dst), gain in coefficients.items() if dst == output)
-            for output in range(len(destination))
-        ),
-    )
-    matrix = [{"source": s, "destination": d, "gain": g / headroom} for (s, d), g in coefficients.items()]
-    return validate_channel_map(matrix, len(source), len(destination))
+    matrix = [{"source": s, "destination": d, "gain": g} for (s, d), g in coefficients.items()]
+    return finish(matrix)

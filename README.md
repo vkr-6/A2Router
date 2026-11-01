@@ -109,11 +109,14 @@ PipeWire device routing, mixing, virtual sinks and endpoint volume/mute remain.
 
 Channel Matrix supports explicit remapping, duplication, summing and gains, using
 reported channel positions/counts. New presets include stereo/mono downmix and
-stereo-to-surround expansion. Downmix excludes LFE and normalizes headroom; upmix
+stereo-to-surround expansion. Downmix excludes LFE and preserves front-channel level by default; optional
+−3 dB headroom and worst-case peak normalization are selectable. Upmix
 creates explicit duplicates/centre contributions and leaves LFE silent. It does not
 recover discrete surround or implement bass management. Unknown channel positions
 require a custom map. The stereo fold-down uses [ITU-R BS.775-style contributions](https://www.itu.int/rec/R-REC-BS.775/);
-7.1 pair handling and headroom normalization are explicit application choices.
+7.1 pair handling and headroom selection are explicit application choices.
+Reload and apply a preset to update an existing saved matrix; custom gains are
+never silently rewritten.
 
 Calibration uses native WASAPI microphone recording and first-output-channel chirps,
 with offline NumPy matched filtering. Keep the microphone fixed and other audio
@@ -161,3 +164,23 @@ Original A2Router contributions use the [MIT license](LICENSE), with explicit
 [exclusions](LICENSING.md). The imported MultiRoute engine has no license in this
 snapshot and cannot be relicensed by A2Router. VB-CABLE and runtime dependencies
 retain their own terms. See [third-party notices](THIRD_PARTY_NOTICES.md).
+
+## Cable volume controls
+
+In Mixer, Cable volume selects either A2Router routed playback or the Windows
+playback endpoint. These are separate gain stages; changing scope does not reset
+or multiply either value automatically. Endpoint mode reads back Windows values
+and reflects changes made outside A2Router.
+
+If the Windows sound slider does not affect VB-CABLE audio, open **VB-CABLE
+panel…** and enable **Windows Volume Control** in its menu. The vendor documents
+that the playback volume control has no effect while this option is disabled:
+[VB-CABLE reference manual, Windows Volume Control](https://vb-audio.com/Cable/VBCABLE_ReferenceManual.pdf).
+A2Router verifies the original control-panel binary before launching it and never
+runs the installer from this action. Driver options are not changed automatically.
+
+Linux PipeWire 1.0+ now exposes a per-route server latency target with explicit
+permission to restart that route. This is a server buffering request, not measured
+acoustic alignment. Linux custom channel matrices, acoustic calibration and
+per-route DSP/gain remain unsupported; endpoint volume/mute, virtual sinks,
+fan-out, many-source server mixing and profiles are supported.

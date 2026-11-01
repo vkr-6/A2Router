@@ -212,14 +212,14 @@ def test_downmix_uses_positions_excludes_lfe_and_has_headroom(layout):
     from a2router.models import LAYOUTS
 
     source = LAYOUTS[layout]
-    mapping = conversion_preset("Downmix to stereo", source, LAYOUTS["stereo"])
+    mapping = conversion_preset("Downmix to stereo", source, LAYOUTS["stereo"], level="normalize")
     assert source.index("lfe") not in {c["source"] for c in mapping}
     assert {c["source"] for c in mapping} == set(range(len(source))) - {source.index("lfe")}
     for channel in (0, 1):
         assert sum(c["gain"] for c in mapping if c["destination"] == channel) <= 1.00000001
     # Channel ordering is derived from labels rather than fixed Windows/Linux indices.
     reordered = tuple(reversed(source))
-    reverse = conversion_preset("Downmix to stereo", reordered, LAYOUTS["stereo"])
+    reverse = conversion_preset("Downmix to stereo", reordered, LAYOUTS["stereo"], level="normalize")
     assert {(source[c["source"]], c["destination"]): c["gain"] for c in mapping} == {
         (reordered[c["source"]], c["destination"]): c["gain"] for c in reverse
     }
@@ -233,7 +233,26 @@ def test_upmix_and_mono_downmix_are_explicit():
     assert LAYOUTS["7.1"].index("lfe") not in {c["destination"] for c in mapping}
     center = LAYOUTS["7.1"].index("front-center")
     assert sum(c["gain"] for c in mapping if c["destination"] == center) == 1
-    mono = conversion_preset("Downmix to mono", LAYOUTS["5.1"], LAYOUTS["mono"])
+    mono = conversion_preset("Downmix to mono", LAYOUTS["5.1"], LAYOUTS["mono"], level="normalize")
     assert sum(c["gain"] for c in mono) == pytest.approx(1)
     with pytest.raises(BackendError, match="Unknown source"):
         conversion_preset("Downmix to stereo", ["channel-1", "channel-2"], LAYOUTS["stereo"])
+
+
+def test_preserve_level_downmix_keeps_front_unity_and_selectable_headroom():
+    from a2router.channels import conversion_preset
+    from a2router.models import LAYOUTS
+
+    source, dest = LAYOUTS["5.1"], LAYOUTS["stereo"]
+    mapping = conversion_preset("Downmix to stereo", source, dest)
+    front = next(c for c in mapping if c["source"] == source.index("front-left"))
+    assert front["gain"] == 1
+    center = next(c for c in mapping if c["source"] == source.index("front-center"))
+    assert center["gain"] == pytest.approx(2**-0.5)
+    safer = conversion_preset("Downmix to stereo", source, dest, level="headroom")
+    assert safer[0]["gain"] == pytest.approx(mapping[0]["gain"] * 10 ** (-3 / 20))
+    stereo = conversion_preset("Downmix to stereo", dest, dest)
+    assert stereo == [
+        {"source": 0, "destination": 0, "gain": 1},
+        {"source": 1, "destination": 1, "gain": 1},
+    ]

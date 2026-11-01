@@ -43,7 +43,16 @@ class PipeWireBackend(AudioBackend):
         self.source_outputs = []
 
     def capabilities(self):
-        return {**super().capabilities(), "device_controls": True, "meters": False}
+        match = re.search(r"PipeWire (\d+)\.(\d+)\.(\d+)", self.server.get("server_name", ""))
+        delay = bool(match and tuple(map(int, match.groups())) >= (1, 0, 0))
+        return {
+            **super().capabilities(),
+            "device_controls": True,
+            "meters": False,
+            "route_delay": delay,
+            "live_route_delay": False,
+            "latency_control": "PipeWire latency target; changing an active route requires its restart",
+        }
 
     @staticmethod
     def _run(args):
@@ -323,7 +332,10 @@ class PipeWireBackend(AudioBackend):
             and str(s.get("source")) == str(source.properties["server_index"])
             for s in self.source_outputs
         )
-        return sink_ok and source_ok
+        requested = f"latency_msec={route.delay_ms}"
+        latency = [a for a in self._arguments(module) if a.startswith("latency_msec=")]
+        delay_ok = latency == ([requested] if route.delay_ms else [])
+        return sink_ok and source_ok and delay_ok
 
     def _connect(self, route):
         UUID(route.id)
@@ -337,6 +349,7 @@ class PipeWireBackend(AudioBackend):
                 "source_dont_move=true",
                 "sink_dont_move=true",
                 "remix=false",
+                *([f"latency_msec={route.delay_ms}"] if route.delay_ms else []),
                 f"channels={source.channels}",
                 "channel_map=" + ",".join(source.positions),
                 "sink_input_properties=" + self._property_argument(props),
@@ -347,6 +360,29 @@ class PipeWireBackend(AudioBackend):
             lambda m: self._route_ok(route, m),
         )
         route.resource_ids = [module]
+
+    def set_route_delay(self, route_id, delay_ms, *, allow_restart=False):
+        if not self.capabilities().get("route_delay"):
+            raise BackendError("Latency targets require PipeWire 1.0 or newer")
+        if type(delay_ms) is not int or not 0 <= delay_ms <= 10000:
+            raise BackendError("Delay must be an integer between 0 and 10000 ms")
+        route = self.get_route_status(route_id)
+        if route.delay_ms == delay_ms:
+            return "Latency target unchanged"
+        live = route.enabled and self.transport_running and bool(self._find("route", route.id))
+        if live and not allow_restart:
+            raise BackendError("Changing this latency target requires restarting the selected route")
+        previous = route.delay_ms
+        self._disconnect(route)
+        route.delay_ms = delay_ms
+        self._reconcile_route(route)
+        if route.status == "error":
+            reason = route.error
+            route.delay_ms = previous
+            self._disconnect(route)
+            self._reconcile_route(route)
+            raise BackendError(f"Latency target failed: {reason}; recovery status: {route.status}")
+        return "Server latency target updated; actual acoustic delay is unmeasured"
 
     def _disconnect(self, route):
         self._unload("route", route.id)
@@ -431,6 +467,7 @@ class PipeWireBackend(AudioBackend):
             "stale_owned_modules": self.stale_resources,
             "processing": "Server PCM mixing/rate conversion may occur. Bit-perfect transport is not verified.",
             "monitoring": "GUI subscribes to pactl events with 250 ms debounce; 3 second polling fallback",
+            "delay_control": "PipeWire 1.0+ latency target; explicit per-route restart, not verified acoustic alignment",
             "latency": "pactl device latency values are reported in microseconds; end-to-end latency is unknown",
         }
 
@@ -439,8 +476,11 @@ class PipeWireBackend(AudioBackend):
             raise BackendError("Volume must be between 0 and 1")
         device = self.get_device(device_id)
         command = "set-sink-volume" if device.kind == "output" else "set-source-volume"
-        self.runner([command, device_id.split(":", 1)[1], f"{round(volume * 100)}%"])
-        self.refresh()
+        self.runner([command, device_id.split(":", 1)[1], str(round(volume * 65536))])
+        self._scan()
+        observed = self.get_device(device_id).properties.get("controls", {}).get("volume")
+        if type(observed) not in (int, float) or abs(observed - volume) > 1 / 65536 + 1e-6:
+            raise BackendError("Audio server volume readback did not confirm the change")
 
     def set_device_mute(self, device_id, muted):
         if type(muted) is not bool:
@@ -448,4 +488,6 @@ class PipeWireBackend(AudioBackend):
         device = self.get_device(device_id)
         command = "set-sink-mute" if device.kind == "output" else "set-source-mute"
         self.runner([command, device_id.split(":", 1)[1], "1" if muted else "0"])
-        self.refresh()
+        self._scan()
+        if self.get_device(device_id).properties.get("controls", {}).get("muted") is not muted:
+            raise BackendError("Audio server mute readback did not confirm the change")

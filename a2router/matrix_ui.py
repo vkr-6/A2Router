@@ -54,6 +54,15 @@ class MatrixEditor(QWidget):
             ]
         )
         row.addWidget(self.preset)
+        self.conversion_level = QComboBox()
+        self.conversion_level.addItem("Preserve front level", "preserve")
+        self.conversion_level.addItem("−3 dB headroom", "headroom")
+        self.conversion_level.addItem("Normalize peaks (quieter)", "normalize")
+        self.conversion_level.setToolTip(
+            "Conversion presets: preserve front channels at unity, reserve 3 dB, or normalize worst-case summed peaks. "
+            "Summed channels can exceed full scale; inspect clipping counters and reduce gain if needed."
+        )
+        row.addWidget(self.conversion_level)
         apply_preset = QPushButton("Load preset")
         apply_preset.clicked.connect(self.load_preset)
         row.addWidget(apply_preset)
@@ -198,7 +207,10 @@ class MatrixEditor(QWidget):
             destination = w.view_devices.get(w.destination.currentData(), {})
             try:
                 mapping = conversion_preset(
-                    name, source.get("positions", []), destination.get("positions", [])
+                    name,
+                    source.get("positions", []),
+                    destination.get("positions", []),
+                    level=self.conversion_level.currentData(),
                 )
             except BackendError as exc:
                 w.error.setText(str(exc))
@@ -209,7 +221,8 @@ class MatrixEditor(QWidget):
                 self.connect_cell(item["source"], item["destination"], 20 * math.log10(item["gain"]))
             self.refresh()
             self.state.setText(
-                "Explicit conversion draft: LFE is excluded; stereo expansion duplicates channels rather than recovering discrete surround. Review before applying."
+                "Conversion draft ready: use Apply to selected route or Add route to activate. "
+                "LFE is excluded; upmix duplicates channels. Preserve-level sums can clip; choose headroom if needed."
             )
             return
         if name == "Stereo swap" and (inputs != 2 or outputs != 2):

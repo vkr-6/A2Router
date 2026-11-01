@@ -510,3 +510,38 @@ def test_monitoring_confirmation_is_recorded_only_after_explicit_yes(app, tmp_pa
         assert len(backend.routes) == 1
     finally:
         shutdown(app, window)
+
+
+@pytest.mark.parametrize(
+    "preset,source_layout,destination_layout",
+    [("Downmix to stereo", "5.1", "stereo"), ("Upmix stereo → surround", "stereo", "5.1")],
+)
+def test_conversion_presets_activate_real_route_definition(
+    app, tmp_path, monkeypatch, preset, source_layout, destination_layout
+):
+    from PySide6.QtWidgets import QMessageBox
+
+    from a2router.models import LAYOUTS
+
+    backend = MockBackend()
+    for ident, layout in (("mic", source_layout), ("speakers", destination_layout)):
+        backend.devices[ident].positions = LAYOUTS[layout]
+        backend.devices[ident].channels = len(LAYOUTS[layout])
+    window = MainWindow(Controller(backend), tmp_path / "conversion.json")
+    try:
+        wait(app, window)
+        window.source.setCurrentIndex(window.source.findData("mic"))
+        window.destination.setCurrentIndex(window.destination.findData("speakers"))
+        editor = window.studio.matrix
+        editor.preset.setCurrentText(preset)
+        editor.load_preset()
+        assert window.channel_group.isChecked()
+        window.monitor_confirm.setChecked(True)
+        monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
+        window.add_route()
+        wait(app, window)
+        route = backend.list_routes()[0]
+        assert route.status == "connected" and route.channel_map
+        assert next(c["gain"] for c in route.channel_map if c["source"] == 0 and c["destination"] == 0) == 1
+    finally:
+        shutdown(app, window)
