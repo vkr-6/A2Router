@@ -44,3 +44,13 @@ Public application/live-matrix extensions are version 1, additive to bridge ABI 
 Process creation times prevent a recycled PID being treated as the old source.
 No endpoint driver is required for process capture. CI compilation and real
 hardware validation of these new native paths remain required in this environment.
+
+## SDK GUID include order
+
+The bridge includes COM GUID declarations (`cguid.h`/`objbase.h`) before the
+audio headers. Kernel Streaming headers define `GUID_NULL` through `__uuidof`;
+loading `cguid.h` afterwards can expand that macro inside its GUID declaration
+and cause C2059 on SDK 26100. Keep `initguid.h` first to retain the SDK property-key
+definitions needed by the bridge. Reference: Microsoft's
+[KS header](https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/shared/ks.h)
+and [COM GUID declarations](https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/um/cguid.h).

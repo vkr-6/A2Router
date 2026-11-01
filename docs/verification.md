@@ -179,3 +179,13 @@ Supplied PNG branding and Orange default (2026-11-01):
   successfully on Linux. No Windows software was installed or changed.
 - Linux tar.gz and .deb rebuilt; both SHA256 checks passed. The portable archive
   contains the byte-identical supplied PNG and no superseded SVG logos.
+
+Windows SDK GUID declaration build fix (2026-11-01):
+
+- Moved COM GUID declarations ahead of audio/process-capture headers in the
+  bridge, addressing the reported SDK 26100 cguid.h C2059 __uuidof expansion.
+  initguid.h remains first to preserve required property-key definitions.
+- Full Linux Python/Qt suite: 188 passed, 14 skipped. Native GNU C++20 core
+  tests, Ruff and git diff checks passed. MSVC compilation must be verified by
+  rerunning the manual Windows workflow; no Windows compiler was installed and
+  no Windows settings, drivers or software were changed.

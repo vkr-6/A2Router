@@ -6,12 +6,17 @@
 // in this translation unit instead of relying on an SDK import-library symbol.
 // This must precede all SDK headers so DEFINE_PROPERTYKEY sees INITGUID.
 #include <initguid.h>
+#include <windows.h>
+// Load COM's GUID_NULL declaration before audio/KS headers can redefine it as
+// __uuidof(struct GUID_NULL). A later cguid.h inclusion would expand that macro
+// inside its extern declaration and fail with C2059 on Windows SDK 26100.
+#include <cguid.h>
+#include <objbase.h>
+#include <mmdeviceapi.h>
+#include <Audioclient.h>
 #include <audiopolicy.h>
 #include <tlhelp32.h>
 #include "WindowsProcessCapture.h"
-#include <windows.h>
-#include <mmdeviceapi.h>
-#include <Audioclient.h>
 #include <mmreg.h>
 #include <cfgmgr32.h>
 #include <Functiondiscoverykeys_devpkey.h>
