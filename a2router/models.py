@@ -22,6 +22,13 @@ class BackendError(RuntimeError):
     """Recoverable backend or configuration failure, suitable for display."""
 
 
+def device_state_label(state):
+    """Clarify audio-server idle suspension without changing the reported state."""
+    if str(state).upper() == "SUSPENDED":
+        return "Idle (suspended)"
+    return str(state).capitalize()
+
+
 @dataclass
 class Device:
     id: str

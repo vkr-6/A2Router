@@ -251,3 +251,32 @@ Unified Appearance preferences and charcoal navigation (2026-11-01):
 - Linux portable archive and Debian package rebuilt, packaged GUI smoke passed,
   both PNG logo variants are included and both SHA256 checks passed. Windows
   binaries still require the manual workflow; no native Windows build was run.
+
+Popup lifecycle, palette consistency and idle-sink verification (2026-11-01):
+
+- Set the Accent, Highlight and link roles explicitly and apply one application-wide
+  stylesheet so menus/dropdowns/dialogs do not retain a previous theme's colours.
+  Navigation icons receive the newly constructed palette directly rather than a
+  cached styled-widget palette. Fusion/stylesheet updates are cached to avoid
+  repeated whole-application style recreation through QStyleSheetStyle.
+- Older preferences migrate to the corrected Orange default once (appearance
+  version 2); later choices persist. Settings construction now respects the
+  configured format, keeping test preferences isolated from desktop settings.
+- Recent-profile state is parented to the main window. Owned combos/menus close on
+  hide, minimize, close, workspace change and app deactivation; theme changes
+  dismiss open popups before repolishing them.
+- Linux suspended states now display as Idle (suspended), with a wake-on-audio
+  explanation in device-table tooltips. Native state remains intact. No server
+  suspension policy, system default or privileged audio setting was changed.
+- Full Linux Python/Qt suite: 192 passed, 15 skipped. Regression tests cover stale
+  accents after Lime/Dark/Orange switches, popup colours/closure, default-theme
+  migration/persistence and routable idle virtual devices. Ruff check/format and
+  git diff checks passed. GUI test cleanup releases closed Qt windows explicitly.
+- Private PipeWire 1.0.5 integration under UID 1000: 5 passed. Both new test sinks
+  initially reported SUSPENDED, then verified stereo PCM traversed the route
+  without sudo. Existing fan-out/mixing, application copying, GUI, reconnect,
+  server-restart and resource-cleanup tests also passed. No physical audio path
+  or Windows GUI/native playback was tested, and Windows was not modified.
+- Linux portable archive and Debian package rebuilt; packaged GUI smoke and both
+  SHA256 checks passed. Updated Windows UI still requires a Windows rebuild and
+  target-desktop check of the reported popup artefact.

@@ -23,6 +23,31 @@ def monitor(config):
     return "source:" + config.device_id.removeprefix("sink:") + ".monitor"
 
 
+def test_idle_virtual_sinks_resume_with_user_session_pcm():
+    if os.environ.get("A2ROUTER_PCM_TEST") != "1":
+        pytest.skip("Set A2ROUTER_PCM_TEST=1 for PCM verification")
+    backend = PipeWireBackend(owner="test_" + uuid4().hex)
+    backend.refresh()
+    source, destination = [VirtualDevice("idle " + name) for name in ("source", "destination")]
+    try:
+        for config in (source, destination):
+            backend.create_virtual_device(config)
+        time.sleep(0.5)
+        backend.refresh()
+        initial = [backend.get_device(c.device_id).state.upper() for c in (source, destination)]
+        assert all(state in ("IDLE", "SUSPENDED") for state in initial), initial
+        route = backend.create_route(monitor(source), destination.device_id)
+        assert route.status == "connected", route.error
+        verify_pcm(source, destination)
+        print(
+            f"Idle virtual-sink PCM verified: uid={getattr(os, 'getuid', lambda: 'N/A')()}, initial={initial}"
+        )
+    finally:
+        backend.cleanup_owned()
+        backend.refresh(reconcile=False)
+        assert source.device_id not in backend.devices and destination.device_id not in backend.devices
+
+
 def test_server_layouts_fanout_mixing_restore_cleanup(tmp_path):
     backend = PipeWireBackend(owner="test_" + uuid4().hex)
     backend.refresh()

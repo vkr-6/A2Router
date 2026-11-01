@@ -350,19 +350,20 @@ def test_emergency_discards_queued_restart_and_stops_after_active_poll(app):
         shutdown(app, window)
 
 
-def test_theme_and_table_layout_survive_window_restart(app, tmp_path, monkeypatch):
+def test_theme_and_table_layout_survive_window_restart(app):
     from PySide6.QtGui import QPalette
 
-    settings = QSettings(str(tmp_path / "branding.ini"), QSettings.IniFormat)
+    settings = QSettings(QSettings.defaultFormat(), QSettings.UserScope, "A2Router", "Studio")
     settings.setValue("theme", "Dark")  # A preference saved before the branding update.
-    monkeypatch.setattr("a2router.studio.QSettings", lambda *args: settings)
+    settings.setValue("orangeBrandingV1", True)
+    settings.setValue("appearanceVersion", 1)
     first = MainWindow(Controller(MockBackend()))
     wait(app, first)
     assert first.studio.theme.currentText() == "Orange"
     assert first.palette().color(QPalette.Highlight).name() == "#ff9600"
     assert first.palette().color(QPalette.Window).name() == "#242424"
     assert app.palette().color(QPalette.Base).name() == "#191919"
-    assert settings.value("orangeBrandingV1", False, type=bool)
+    assert settings.value("appearanceVersion", 0, type=int) == 2
     first.studio.theme.setCurrentText("Dark")
     first.studio.output_table.view.setColumnWidth(0, 267)
     first.studio.output_table.view.setColumnHidden(2, True)
@@ -375,3 +376,75 @@ def test_theme_and_table_layout_survive_window_restart(app, tmp_path, monkeypatc
         assert second.studio.output_table.view.isColumnHidden(2)
     finally:
         shutdown(app, second)
+
+
+def test_theme_switch_updates_popup_palette_and_checked_icon(app):
+    from PySide6.QtGui import QIcon, QPalette
+
+    window = MainWindow(Controller(MockBackend()))
+    try:
+        wait(app, window)
+        window.show()
+        for theme in ("Lime", "Dark", "Orange"):
+            window.studio.theme.setCurrentText(theme)
+            app.processEvents()
+        window.navigation.setCurrentRow(4)
+        combo = window.studio.theme
+        combo.showPopup()
+        app.processEvents()
+        assert app.palette().color(QPalette.Accent).name() == "#ff9600"
+        assert combo.view().palette().color(QPalette.Highlight).name() == "#ff9600"
+        image = window.navigation.item(4).icon().pixmap(18, 18, QIcon.Normal, QIcon.On).toImage()
+        colours = [
+            image.pixelColor(x, y)
+            for x in range(image.width())
+            for y in range(image.height())
+            if image.pixelColor(x, y).alpha() > 220
+        ]
+        assert colours and all(p.red() > 250 and 148 <= p.green() <= 152 and p.blue() < 2 for p in colours)
+        window.hide()
+        app.processEvents()
+        assert not combo.view().window().isVisible()
+        assert window.studio.profiles.parentWidget() is window
+    finally:
+        shutdown(app, window)
+
+
+def test_owned_menus_close_when_application_loses_focus(app):
+    from PySide6.QtCore import QPoint
+
+    window = MainWindow(Controller(MockBackend()))
+    try:
+        wait(app, window)
+        window.show()
+        menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "Tools")
+        menu.popup(window.mapToGlobal(QPoint(25, 25)))
+        app.processEvents()
+        assert menu.isVisible()
+        window._application_state_changed(Qt.ApplicationInactive)
+        app.processEvents()
+        assert not menu.isVisible()
+    finally:
+        shutdown(app, window)
+
+
+def test_suspended_virtual_device_is_idle_and_routable(app):
+    from a2router.models import VirtualDevice
+
+    backend = MockBackend()
+    config = VirtualDevice("Idle cable")
+    backend.create_virtual_device(config)
+    backend.devices[config.device_id].state = "SUSPENDED"
+    window = MainWindow(Controller(backend))
+    try:
+        wait(app, window)
+        model = window.studio.output_table.model
+        row = next(i for i, d in enumerate(model.rows) if d["id"] == config.device_id)
+        state = model.index(row, 6)
+        assert model.data(state) == "Idle (suspended)"
+        assert "wakes" in model.data(state, Qt.ToolTipRole)
+        assert backend.get_device(config.device_id).state == "SUSPENDED"
+        route = backend.create_route("mic", config.device_id)
+        assert route.status == "connected"
+    finally:
+        shutdown(app, window)

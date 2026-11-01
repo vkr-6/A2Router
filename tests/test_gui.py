@@ -76,6 +76,13 @@ def shutdown(app, window):
     while not window.executor._shutdown and time.monotonic() < deadline:
         app.processEvents()
         time.sleep(0.005)
+    # Production exits its QApplication here; tests reuse one, so release the
+    # closed window before another global theme change repolishes old widgets.
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    assert window.executor._shutdown
+    window.deleteLater()
+    QCoreApplication.sendPostedEvents(window, QEvent.DeferredDelete)
 
 
 def test_refresh_keeps_items_selection_and_status(app):

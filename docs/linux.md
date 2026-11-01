@@ -58,3 +58,16 @@ non-unity gain or nonzero delay requests fail explicitly. Device-level loopback
 routes still support a PipeWire 1.0+ latency target. Native graph copies can be
 silent when the application is idle; graph connectivity alone is not proof of
 physical playback. Integration tests use actual PCM at silent virtual sinks.
+
+## Idle virtual devices
+
+An unused virtual sink may report `SUSPENDED`. The UI calls this **Idle (suspended)**
+and preserves the native state in device details. Starting an application stream
+normally activates it; no administrator operation is needed. Keep A2Router in
+your normal desktop audio session rather than launching it with sudo.
+
+A private PipeWire 1.0.5 test was run as user hp (UID 1000): both temporary virtual
+sinks initially reported SUSPENDED, then a managed monitor route transmitted
+verified stereo PCM between them. All owned test resources were removed. This
+verifies audio-server transport, not physical speaker playback. PipeWire documents
+[idle and suspend behaviour](https://pipewire.pages.freedesktop.org/pipewire/page_man_pipewire-props_7.html).

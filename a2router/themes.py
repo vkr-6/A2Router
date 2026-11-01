@@ -35,7 +35,10 @@ def apply_theme(window, name, density):
         (QPalette.Button, button),
         (QPalette.ButtonText, text),
         (QPalette.Highlight, accent),
+        (QPalette.Accent, accent),
         (QPalette.HighlightedText, selected_text),
+        (QPalette.Link, accent),
+        (QPalette.LinkVisited, accent),
         (QPalette.ToolTipBase, base),
         (QPalette.ToolTipText, text),
         (QPalette.Mid, border),
@@ -44,22 +47,30 @@ def apply_theme(window, name, density):
         palette.setColor(role, QColor(color))
     for role in (QPalette.Text, QPalette.WindowText, QPalette.ButtonText):
         palette.setColor(QPalette.Disabled, role, QColor(muted))
-    if app.style().objectName().lower() != "fusion":
+    # A stylesheet wraps Fusion in QStyleSheetStyle, whose objectName is empty.
+    # Do not recreate the style on every preference change through that wrapper.
+    if not app.property("a2routerFusionStyle"):
         app.setStyle("Fusion")
-    app.setPalette(palette)
-    window.setPalette(palette)
+        app.setProperty("a2routerFusionStyle", True)
     window.setFont(QFont("Segoe UI" if sys.platform == "win32" else "DejaVu Sans", 9))
     padding = 2 if density == "Extra compact" else 4
     hover = QColor(button).lighter(120).name()
-    window.setStyleSheet(f"""
+    # Popups and dialogs are separate native windows. An application-wide sheet
+    # prevents them retaining a palette from a previous theme/window ancestor.
+    window.setStyleSheet("")
+    stylesheet = f"""
         QWidget {{ background: {bg}; color: {text}; }}
         QMenuBar, QMenu, QToolBar, QStatusBar {{ background: {bg}; color: {text}; }}
         QMenu::item {{ padding: 5px 24px; }}
         QMenu::item:selected, QMenuBar::item:selected {{ background: {accent}; color: {selected_text}; }}
+        QMenu::item:disabled {{ color: {muted}; }}
         QAbstractItemView, QPlainTextEdit, QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
             background: {base}; color: {text}; border: 1px solid {border}; border-radius: 3px;
             selection-background-color: {accent}; selection-color: {selected_text}; }}
         QAbstractItemView {{ alternate-background-color: {alternate}; }}
+        QComboBox QAbstractItemView {{ background: {base}; color: {text};
+            selection-background-color: {accent}; selection-color: {selected_text}; outline: 0; }}
+        QAbstractItemView::item:selected {{ background: {accent}; color: {selected_text}; }}
         QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{ min-height: 22px; padding: 1px 4px; }}
         QPushButton, QToolButton {{ background: {button}; color: {text}; border: 1px solid {border};
             border-radius: 3px; padding: 4px 10px; min-height: 18px; }}
@@ -90,4 +101,11 @@ def apply_theme(window, name, density):
         QProgressBar {{ border: 1px solid {border}; background: {base}; text-align: center; }}
         QProgressBar::chunk {{ background: {accent}; }}
         QToolTip {{ background: {base}; color: {text}; border: 1px solid {border}; padding: 5px; }}
-    """)
+    """
+    theme_key = f"{name}|{density}"
+    if app.property("a2routerThemeKey") != theme_key:
+        app.setPalette(palette)
+        app.setStyleSheet(stylesheet)
+        app.setProperty("a2routerThemeKey", theme_key)
+    window.setPalette(palette)
+    return palette

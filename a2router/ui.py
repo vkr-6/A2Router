@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QSignalBlocker, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QProcess, QProcessEnvironment, QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from a2router.dashboard import Dashboard
-from a2router.models import BackendError, VirtualDevice
+from a2router.models import BackendError, VirtualDevice, device_state_label
 
 
 class Results(QObject):
@@ -95,10 +95,12 @@ class MainWindow(QMainWindow):
 
         self.studio = Studio(self)
         self.navigation.currentRowChanged.connect(self.tabs.setCurrentIndex)
+        self.navigation.currentRowChanged.connect(self.dismiss_popups)
         self.navigation.currentRowChanged.connect(
             lambda row: self.header_title.setText(self.navigation.item(row).text()) if row >= 0 else None
         )
         self.navigation.setCurrentRow(0)
+        QApplication.instance().applicationStateChanged.connect(self._application_state_changed)
         # Tray lifecycle controls remain available independently of workspace menus.
         menu = QMenu(self)
         show = QAction("Show A2Router", self)
@@ -1240,14 +1242,39 @@ class MainWindow(QMainWindow):
             )
         for config in snapshot["virtual_devices"]:
             ident = "sink:a2router_v_" + config["id"].replace("-", "")
-            state = self.view_devices.get(ident, {}).get("state", "unavailable")
+            state = device_state_label(self.view_devices.get(ident, {}).get("state", "unavailable"))
             if self._vbcable_page:
                 state = "Unsupported definition: VB-CABLE uses shared endpoints"
             virtual_rows.append((config["id"], [config["name"], config["layout"], state, ident]))
         self._update_tree(self.virtual_tree, virtual_rows)
         self.studio.update(snapshot)
 
+    def dismiss_popups(self, *_):
+        """Transient controls must not remain on the desktop after their owner hides."""
+        for combo in self.findChildren(QComboBox):
+            combo.hidePopup()
+        for menu in self.findChildren(QMenu):
+            if menu.isVisible():
+                menu.close()
+        popup = QApplication.activePopupWidget()
+        if popup is not None and self.isAncestorOf(popup):
+            popup.close()
+
+    def _application_state_changed(self, state):
+        if state != Qt.ApplicationActive:
+            self.dismiss_popups()
+
+    def hideEvent(self, event):
+        self.dismiss_popups()
+        super().hideEvent(event)
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.WindowStateChange and self.isMinimized():
+            self.dismiss_popups()
+        super().changeEvent(event)
+
     def closeEvent(self, event):
+        self.dismiss_popups()
         if not self.exit_ready and not self.exiting and self.studio.calibration_panel.running:
             self.studio.calibration_panel.cancel_measurement()
         if self.exit_ready:

@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from a2router.models import device_state_label
+
 
 class DeviceModel(QAbstractTableModel):
     edit_requested = Signal(str, str, object)
@@ -47,6 +49,10 @@ class DeviceModel(QAbstractTableModel):
         if role == Qt.UserRole:
             return device["id"]
         if role == Qt.ToolTipRole:
+            if index.column() == 6 and str(device["state"]).upper() == "SUSPENDED":
+                return (
+                    "Idle audio-server endpoint; normally wakes when audio starts. Reported state: SUSPENDED."
+                )
             return device["id"]
         if role not in (Qt.DisplayRole, Qt.EditRole):
             return None
@@ -57,7 +63,7 @@ class DeviceModel(QAbstractTableModel):
             device.get("channels"),
             device.get("sample_rate"),
             device.get("sample_format"),
-            device["state"],
+            device_state_label(device["state"]),
         ]
         if self.kind == "output":
             import math

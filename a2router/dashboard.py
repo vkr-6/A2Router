@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from a2router.models import device_state_label
+
 
 class PeakMeter(QWidget):
     def __init__(self, parent=None):
@@ -118,7 +120,7 @@ class DeviceCard(QFrame):
             if rate
             else f"{device.get('channels') or '?'} ch"
         )
-        self.format_label.setText(text + "  ·  " + device.get("state", "unknown").title())
+        self.format_label.setText(text + "  ·  " + device_state_label(device.get("state", "unknown")))
         controls = device.get("properties", {}).get("controls", {})
         volume_available = controls.get("volume_available", False)
         self.volume.setToolTip(

@@ -90,7 +90,7 @@ class Navigation(QWidget):
 class Studio:
     def __init__(self, window):
         self.window = w = window
-        self.settings = QSettings("A2Router", "Studio")
+        self.settings = QSettings(QSettings.defaultFormat(), QSettings.UserScope, "A2Router", "Studio")
         self.profile_path = None
         self.saved_fingerprint = None
         self.last_fingerprint = None
@@ -173,10 +173,10 @@ class Studio:
         saved_theme = self.settings.value("theme", "Orange")
         # Apply the new branding once to upgraded installs as well as fresh ones.
         # Later explicit theme selections remain persistent.
-        if not self.settings.value("orangeBrandingV1", False, type=bool):
+        if self.settings.value("appearanceVersion", 0, type=int) < 2:
             saved_theme = "Orange"
             self.settings.setValue("theme", saved_theme)
-            self.settings.setValue("orangeBrandingV1", True)
+            self.settings.setValue("appearanceVersion", 2)
         self.theme.setCurrentText("White" if saved_theme == "Light" else saved_theme)
         self.theme.currentTextChanged.connect(self.apply_theme)
         form.addRow("Theme", self.theme)
@@ -229,7 +229,7 @@ class Studio:
         bar = QToolBar("Routing controls", w)
         bar.setMovable(False)
         bar.setIconSize(QSize(16, 16))
-        self.profiles = QComboBox()  # Internal recent-file state; never shown outside File.
+        self.profiles = QComboBox(w)  # Owned recent-file state; never shown outside File.
         self.profiles.hide()
         self.profiles.setMinimumContentsLength(16)
         self.profiles.setToolTip("Recent profiles; switching replaces routes after confirmation")
@@ -518,8 +518,9 @@ class Studio:
     def apply_theme(self, *_):
         from a2router.themes import apply_theme
 
-        apply_theme(self.window, self.theme.currentText(), self.density.currentText())
-        self.window.navigation.update_icons(self.window.palette())
+        self.window.dismiss_popups()
+        palette = apply_theme(self.window, self.theme.currentText(), self.density.currentText())
+        self.window.navigation.update_icons(palette)
         self.settings.setValue("theme", self.theme.currentText())
         self.settings.setValue("density", self.density.currentText())
 

@@ -86,6 +86,18 @@ wordmark. Windows ICO sizes preserve the mark’s proportions. The Diagnostics p
 and GUI export/log controls have been removed. Backend errors remain visible in
 the status bar, and existing command-line diagnostics are still available.
 
+Theme updates apply to menus, dropdowns, dialogs and navigation icons together.
+Older releases migrate to the corrected Orange default once; later theme choices
+remain saved. Popups close when the window hides/minimizes, the workspace changes,
+or the application loses focus.
+
+On Linux, **Idle (suspended)** means the audio server has paused an unused endpoint,
+not that virtual-device creation failed. It normally wakes when an application
+plays into it or a route uses it. Run A2Router as your desktop user; sudo is not
+needed for ordinary virtual sinks/routes. If audio stays silent while playing,
+check the selected application sink, route status and mute controls. Device
+properties and command-line output retain the server's raw state.
+
 Shortcuts: Ctrl+N/Open Ctrl+O/Save Ctrl+S/Save As Ctrl+Shift+S, refresh Ctrl+R/F5,
 filter Ctrl+F, emergency Ctrl+Shift+M, help F1. Closing hides/minimizes; File → Exit
 stops Windows native processing. Linux server-owned routes can remain running.
