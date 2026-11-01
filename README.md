@@ -219,6 +219,13 @@ changing device channel counts requires a restart to negotiate the format. Retai
 live edits per output; stop/start clears this history. PipeWire edits replace only
 the selected route's owned links. Profiles keep the same version-1 schema.
 
+On a classic PulseAudio server (including PulseAudio-backed WSL sessions), the
+channel matrix uses owned remap-sink/loopback modules instead of native PipeWire
+ports. It supports reported multichannel layouts, remapping, duplication and
+unity-gain summing, up to 64 connections per route. Applying a map restarts only
+that route. Per-connection gain, weighted conversion presets and additional delay
+remain unavailable on this fallback. No PulseAudio default devices are changed.
+
 Workflow reference: [AppAudioRouter](https://github.com/Eververdants/AppAudioRouter).
 The Windows implementation follows Microsoft's public
 [process-loopback API](https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ns-audioclientactivationparams-audioclient_activation_params).

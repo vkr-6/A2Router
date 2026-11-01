@@ -39,7 +39,7 @@ guarantee an exact acoustic delay. Earlier PipeWire and native PulseAudio server
 keep this control unavailable.
 
 Endpoint gain uses Pulse's native 16.16 volume units and verifies the server's
-readback. Mute is also read back. Linux unity matrices are available via native graph links. Per-link/route gain DSP,
+readback. Mute is also read back. Linux unity matrices use native PipeWire links or the classic PulseAudio fallback below. Per-link/route gain DSP,
 acoustic calibration and hardware-format editing are not implemented. Unsupported
 controls remain gated; Windows functionality is not used as evidence of Linux parity.
 
@@ -71,3 +71,25 @@ sinks initially reported SUSPENDED, then a managed monitor route transmitted
 verified stereo PCM between them. All owned test resources were removed. This
 verifies audio-server transport, not physical speaker playback. PipeWire documents
 [idle and suspend behaviour](https://pipewire.pages.freedesktop.org/pipewire/page_man_pipewire-props_7.html).
+
+
+## Classic PulseAudio channel matrix
+
+Classic PulseAudio now supports whole-device channel remapping through owned
+`module-remap-sink` and `module-loopback` pairs. Connections are grouped into
+layers with unique source/destination positions; extra layers implement native
+server summing or duplication. No Python sample processing runs. Server-side
+conversion/resampling may occur; bit-perfect audio is not claimed.
+
+Mapping is limited to unity gain and 64 connections per route. Applying changes
+briefly restarts only that route. Private helper sinks and their monitors are
+excluded from A2Router's inventory, and default devices remain unchanged. Both
+stream attachments, remapped formats/positions, ownership and resource identity
+are verified. Partial failure cleans owned resources; removal is dependent-first
+and re-resolves IDs, ignoring mutable module usage counters.
+
+Reference: PulseAudio's [remap modules](https://wiki.freedesktop.org/www/Software/PulseAudio/Documentation/User/Modules/).
+With an existing PulseAudio daemon binary and modules available, run the isolated
+tests with `dbus-run-session -- python tests/run_private_pulse.py`. This starts a
+private server without loading hardware or changing the desktop server. Optional
+`A2ROUTER_PULSE_BINARY`/`A2ROUTER_PULSE_MODULE_PATH` select extracted test packages.

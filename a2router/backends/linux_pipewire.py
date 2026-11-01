@@ -42,6 +42,10 @@ class PipeWireBackend(AudioBackend):
         self.stale_resources = []
         self.sink_inputs = []
         self.source_outputs = []
+        self.raw_sinks = []
+        from a2router.backends.pulse_matrix import PulseMatrix
+
+        self.pulse_matrix = PulseMatrix(self)
         from a2router.backends.pipewire_graph import PipeWireGraph
 
         if graph_runner is None and runner is None and all(shutil.which(t) for t in ("pw-dump", "pw-link")):
@@ -58,14 +62,25 @@ class PipeWireBackend(AudioBackend):
             "device_controls": True,
             "meters": False,
             "applications": self.graph_available,
-            "channel_routing": self.graph_available,
+            "channel_routing": self.graph_available or self._pulse_mapping(),
             "channel_gain": False,
             "live_channel_routing": self.graph_available,
             "graph_route_delay": False,
             "route_delay": delay,
             "live_route_delay": False,
             "latency_control": "PipeWire latency target; changing an active route requires its restart",
+            "channel_routing_reason": (
+                "PulseAudio: unity channel remapping/duplication; applying restarts this route"
+                if self._pulse_mapping()
+                else "PipeWire: unity channel links"
+                if self.graph_available
+                else self.graph_error or "Channel routing needs pw-dump/pw-link in the same PipeWire session"
+            ),
         }
+
+    def _pulse_mapping(self):
+        name = self.server.get("server_name", "").lower()
+        return bool(name and "pulse" in name and "pipewire" not in name)
 
     @staticmethod
     def _graph_run(args):
@@ -86,7 +101,9 @@ class PipeWireBackend(AudioBackend):
                 "Native application/channel links do not support extra delay; reset delay to zero first"
             )
         if any(c["gain"] != 1 for c in route.channel_map):
-            raise BackendError("Native PipeWire channel links support unity gain only")
+            raise BackendError("Native audio-server channel routing supports unity gain only")
+        if route.channel_map and self._pulse_mapping():
+            self.pulse_matrix.plan(route)
 
     @staticmethod
     def _run(args):
@@ -132,9 +149,20 @@ class PipeWireBackend(AudioBackend):
         if not isinstance(info, dict):
             raise BackendError("Invalid audio server information")
         sinks, sources = self._json("list", "sinks"), self._json("list", "sources")
+        self.raw_sinks = sinks
+        hidden_monitors = {
+            str(s.get("monitor_source"))
+            for s in sinks
+            if s.get("properties", {}).get("a2router.internal") == "matrix"
+        }
         devices = {}
         for kind, rows in (("output", sinks), ("input", sources)):
             for row in rows:
+                if row.get("properties", {}).get("a2router.internal") == "matrix" or (
+                    kind == "input"
+                    and (str(row.get("index")) in hidden_monitors or row.get("name") in hidden_monitors)
+                ):
+                    continue
                 name = row["name"]
                 props = row.get("properties", {})
                 spec = row.get("sample_specification", "")
@@ -210,21 +238,45 @@ class PipeWireBackend(AudioBackend):
         server_name = info.get("server_name", "unknown")
         self.name = f"{'PipeWire-Pulse' if 'pipewire' in server_name.lower() else 'PulseAudio compatibility'}: {server_name}"
 
-    @staticmethod
-    def _arguments(module):
+    def _arguments(self, module):
+        if self._pulse_mapping():
+            # Pulse preserves the raw quoted property list; unlike POSIX shell
+            # quoting, its single quotes allow backslash-escaped apostrophes.
+            pattern = re.compile(r"""\s*([^\s=]+)=("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s]*)""")
+            argument, tokens = module.get("argument", ""), []
+            while argument.strip():
+                match = pattern.match(argument)
+                if not match:
+                    return []
+                key, value = match.groups()
+                if value.startswith(("'", '"')):
+                    value = value[1:-1]
+                tokens.append(key + "=" + value)
+                argument = argument[match.end() :]
+            return tokens
         try:
             return shlex.split(module.get("argument", ""))
         except ValueError:
             return []
 
     def _owned(self, module, kind=None, ident=None):
-        if module.get("name") not in ("module-null-sink", "module-loopback"):
+        if module.get("name") not in (
+            "module-null-sink",
+            "module-loopback",
+            "module-remap-source",
+            "module-remap-sink",
+        ):
             return False
         tokens = self._arguments(module)
         properties = []
         for token in tokens:
             key, _, value = token.partition("=")
-            if key in ("sink_properties", "sink_input_properties", "source_output_properties"):
+            if key in (
+                "sink_properties",
+                "source_properties",
+                "sink_input_properties",
+                "source_output_properties",
+            ):
                 try:
                     properties.extend(shlex.split(value))
                 except ValueError:
@@ -236,11 +288,19 @@ class PipeWireBackend(AudioBackend):
     def _find(self, kind, ident):
         return [m for m in self.modules if self._owned(m, kind, ident)]
 
+    @staticmethod
+    def _same_module(first, second):
+        # Usage counters can change while dependants are being removed.
+        return all(first.get(k) == second.get(k) for k in ("index", "name", "argument"))
+
     def _unload(self, kind, ident):
         # Fresh scan prevents deletion after server restart reuses an index.
         self.modules = self._modules()
-        for module in self._find(kind, ident):
-            self.runner(["unload-module", str(module["index"])])
+        # Dependants are created after their master remap nodes. Recheck every
+        # handle because unloading a master may auto-remove dependent modules.
+        for module in reversed(self._find(kind, ident)):
+            if any(self._same_module(module, current) for current in self._modules()):
+                self.runner(["unload-module", str(module["index"])])
         self.modules = self._modules()
 
     def _load(self, module_name, args, kind, ident, verify):
@@ -282,7 +342,7 @@ class PipeWireBackend(AudioBackend):
                         and candidate.get("argument") == expected_argument
                     ):
                         current = self._modules()
-                        if candidate in current:
+                        if any(self._same_module(candidate, m) for m in current):
                             self.runner(["unload-module", str(candidate["index"])])
                 remaining = self._modules()
                 if (
@@ -304,8 +364,10 @@ class PipeWireBackend(AudioBackend):
             and device.properties.get("a2router.owner") == self.owner
         )
 
-    @staticmethod
-    def _property_argument(value):
+    def _property_argument(self, value):
+        if self._pulse_mapping():
+            # pa_modargs_get_proplist parses the raw value (one escaping level).
+            return "'" + value.replace("'", "\\'") + "'"
         # Pulse module arguments have their own quote parser. POSIX shlex.quote
         # uses quote concatenation for apostrophes, which that parser does not
         # support. Nest escaped double quotes explicitly instead.
@@ -382,6 +444,11 @@ class PipeWireBackend(AudioBackend):
 
     def _connect(self, route):
         UUID(route.id)
+        if route.channel_map and self._pulse_mapping():
+            self._unload("route", route.id)
+            self.pulse_matrix.connect(route)
+            return
+        self._unload("matrix", route.id)
         if route.channel_map or route.source_id.startswith("pw-application:"):
             if not self.graph_available:
                 raise BackendError(
@@ -442,6 +509,7 @@ class PipeWireBackend(AudioBackend):
 
     def _disconnect(self, route):
         self._unload("route", route.id)
+        self._unload("matrix", route.id)
         if self.graph_available or any(r.startswith("link:") for r in route.resource_ids):
             if not self.graph:
                 raise BackendError("Graph cleanup is unavailable; preserve route definitions and retry")
@@ -460,6 +528,14 @@ class PipeWireBackend(AudioBackend):
             return
         if not reconcile:
             for route in self.routes.values():
+                if route.channel_map and self._pulse_mapping():
+                    connected = self.pulse_matrix.healthy(route)
+                    route.resource_ids = [str(m["index"]) for m in self._find("matrix", route.id)]
+                    route.status = "connected" if connected else "pending" if route.enabled else "disabled"
+                    route.error = (
+                        "" if connected or not route.enabled else "PulseAudio mapping resources unavailable"
+                    )
+                    continue
                 if route.channel_map or route.source_id.startswith("pw-application:"):
                     links = self.graph.owned(route.id) if self.graph_available else []
                     route.resource_ids = [self.graph.resource(link) for link in links]
@@ -507,7 +583,11 @@ class PipeWireBackend(AudioBackend):
     def _update_stale(self):
         known = {
             str(m["index"])
-            for kind, values in (("route", self.routes), ("virtual", self.virtual_devices))
+            for kind, values in (
+                ("route", self.routes),
+                ("matrix", self.routes),
+                ("virtual", self.virtual_devices),
+            )
             for ident in values
             for m in self._find(kind, ident)
         }
@@ -526,11 +606,11 @@ class PipeWireBackend(AudioBackend):
         self.modules = self._modules()
         if self.graph_available:
             self.graph.disconnect()
-        for name in ("module-loopback", "module-null-sink"):
+        for name in ("module-loopback", "module-remap-sink", "module-remap-source", "module-null-sink"):
             for m in list(self.modules):
                 if m["name"] == name and self._owned(m):
                     fresh = self._modules()
-                    if any(x["index"] == m["index"] and x == m for x in fresh):
+                    if any(self._same_module(x, m) for x in fresh):
                         self.runner(["unload-module", str(m["index"])])
         for route in self.routes.values():
             route.enabled, route.status, route.resource_ids = False, "disabled", []
@@ -542,7 +622,11 @@ class PipeWireBackend(AudioBackend):
             **super().diagnostics(),
             "server": self.server,
             "application_graph_error": self.graph_error,
-            "channel_processing": "Native PipeWire unity links; original application output is retained",
+            "channel_processing": (
+                "PulseAudio remap-sink/loopback at unity; mapping changes restart only this route"
+                if self._pulse_mapping()
+                else "Native PipeWire unity links; original application output is retained"
+            ),
             "owned_channel_links": [self.graph.resource(link) for link in self.graph.owned()]
             if self.graph_available
             else [],

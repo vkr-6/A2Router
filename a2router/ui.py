@@ -281,7 +281,7 @@ class MainWindow(QMainWindow):
         self.channel_group.setChecked(False)
         self.channel_group.setEnabled(self.backend.capabilities().get("channel_routing", False))
         self.channel_group.setToolTip(
-            "Optional remapping, duplication and summing. Unmapped outputs are silent; mixed peaks are clipped to ±1."
+            "Optional remapping, duplication and summing. Unmapped outputs are silent; summed signals can clip."
         )
         group_layout = QVBoxLayout(self.channel_group)
         self.channel_panel = QWidget()
@@ -512,7 +512,7 @@ class MainWindow(QMainWindow):
         gain.setSuffix(" dB")
         gain.setEnabled(self.backend.capabilities().get("channel_gain", True))
         gain.setToolTip(
-            "Native PipeWire links use unity gain" if not gain.isEnabled() else "Channel connection gain"
+            "Audio-server channel maps use unity gain" if not gain.isEnabled() else "Channel connection gain"
         )
         self.channel_table.setCellWidget(row, 2, gain)
         for column in range(3):

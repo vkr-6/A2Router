@@ -296,3 +296,74 @@ def test_legacy_parser_detection_does_not_change_other_servers(server):
         assert not backend._legacy_property_parser()
     backend.server = {"server_name": "PulseAudio (on PipeWire 0.3.48)"}
     assert backend._legacy_property_parser()
+
+
+def test_classic_pulse_matrix_plan_and_gain_validation(server):
+    from a2router.models import Route
+
+    def pulse(args):
+        if args == ["-f", "json", "info"]:
+            return json.dumps({"server_name": "pulseaudio", "default_sink_name": "sink"})
+        return server(args)
+
+    backend = PipeWireBackend(pulse, owner="test")
+    backend.refresh()
+    assert backend.capabilities()["channel_routing"]
+    assert not backend.capabilities()["live_channel_routing"]
+    route = Route(
+        "source:mic",
+        "sink:sink",
+        monitoring_confirmed=True,
+        channel_map=[
+            {"source": 0, "destination": 0, "gain": 1},
+            {"source": 1, "destination": 1, "gain": 1},
+        ],
+    )
+    plan = backend.pulse_matrix.plan(route)
+    assert len(plan) == 2 and plan == backend.pulse_matrix.plan(route)
+    assert plan[0][2] == "module-remap-sink"
+    for _, part, module, args, *_ in plan:
+        resource = {"name": module, "argument": " ".join(args)}
+        assert backend._owned(resource, "matrix", route.id)
+        assert backend._owned(resource, "part", part)
+    route.channel_map[1] = {"source": 0, "destination": 1, "gain": 1}
+    assert len(backend.pulse_matrix.plan(route)) == 4
+    route.channel_map[0]["gain"] = 0.5
+    with pytest.raises(BackendError, match="unity gain"):
+        backend._validate_route(route)
+    assert not server.modules
+
+
+def test_pulse_property_ownership_handles_escaped_apostrophes(server):
+    backend = PipeWireBackend(server, owner="test")
+    backend.server = {"server_name": "pulseaudio"}
+    ident = str(uuid4())
+    properties = "device.description=\"A 'quoted' cable\" a2router.owner=test a2router.virtual=" + ident
+    module = {
+        "name": "module-null-sink",
+        "argument": "sink_properties=" + backend._property_argument(properties),
+    }
+    assert backend._owned(module, "virtual", ident)
+    assert not PipeWireBackend(server, owner="other")._owned(module)
+
+
+def test_owned_matrix_cleanup_ignores_mutable_usage_counters(server):
+    ident = str(uuid4())
+    props = f"a2router.owner=test a2router.matrix={ident}"
+    server.modules = [
+        {"index": 20, "name": "module-remap-sink", "argument": f"sink_properties='{props}'"},
+        {"index": 21, "name": "module-loopback", "argument": f"sink_input_properties='{props}'"},
+        {"index": 22, "name": "module-remap-sink", "argument": "master=users_output"},
+    ]
+    reads = []
+
+    def changing_usage(args):
+        if args == ["-f", "json", "list", "modules"]:
+            reads.append(args)
+            return json.dumps([{**m, "usage_counter": len(reads)} for m in server.modules])
+        return server(args)
+
+    backend = PipeWireBackend(changing_usage, owner="test")
+    backend.server = {"server_name": "pulseaudio"}
+    backend._unload("matrix", ident)
+    assert [m["index"] for m in server.modules] == [22]

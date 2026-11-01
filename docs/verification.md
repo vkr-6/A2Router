@@ -280,3 +280,34 @@ Popup lifecycle, palette consistency and idle-sink verification (2026-11-01):
 - Linux portable archive and Debian package rebuilt; packaged GUI smoke and both
   SHA256 checks passed. Updated Windows UI still requires a Windows rebuild and
   target-desktop check of the reported popup artefact.
+
+Classic PulseAudio channel matrix (2026-11-01):
+
+- The reported grey matrix was capability-gated because the screenshot's server
+  was classic PulseAudio rather than native PipeWire. Added a real fallback using
+  owned remap-sink/loopback pairs; normal device routes and PipeWire links remain.
+- Native modules remap reported channels at unity gain, with additional layers
+  for duplication/summing. Limit: 64 connections per route. Weighted gains/DSP
+  remain explicitly unavailable. Applying a map restarts only this route.
+- Matrix capability gating is incremental; unsupported editors retain readable
+  reasons. A unique route matching the selected endpoints can be loaded/applied
+  without separately selecting a hidden route row. Editing changes the draft,
+  and Apply still confirms before altering running audio resources.
+- Classic PulseAudio's raw property parser needs different escaping from
+  PipeWire. Corrected property arguments and ownership parsing; real names with
+  spaces, both quote types and backslashes are verified without shell execution.
+- Helper sinks/monitors are hidden from the device selectors. Resource checks
+  verify both stream attachments, maps and ownership. Cleanup runs dependent-first
+  with fresh identity checks, ignoring mutable usage counters. Failed partial
+  creation rolls back and existing mappings can be restored by the controller.
+- Full Python/Qt suite: 195 passed, 22 skipped. Ruff check/format and diff checks
+  passed. Private PulseAudio 16.1 under UID 1000: 7 passed, including actual PCM
+  stereo swap/duplication, six-channel permutation, multi-channel summing, silent
+  unmapped outputs, default-device preservation, profile/resource adoption,
+  enable/disable/removal, partial failure, names and real GUI Apply wiring.
+- The rebuilt frozen GUI also loaded against the actual private PulseAudio server
+  and reported channel-routing capability. Private PipeWire 1.0.5 regression: 5
+  passed. These are silent virtual-sink tests, not physical playback/acoustic tests.
+- Linux portable tar.gz/.deb rebuilt; both SHA256 checks passed. PulseAudio and
+  dependencies were extracted only for private Linux tests; no system service
+  was installed and no Windows software or settings were changed.

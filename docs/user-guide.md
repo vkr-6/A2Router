@@ -172,3 +172,23 @@ The first edit is live when float formats/channel counts match. Other formats
 require a source restart to negotiate custom processing. Other mapped outputs keep running
 during subsequent edits. Device channel-count changes still need stopping the
 routes that use that device. PipeWire edits only the selected route's owned links.
+
+
+### Channel matrix on PulseAudio
+
+The status bar identifies the active server. A classic PulseAudio server uses a
+remap-sink/loopback fallback; native PipeWire uses port links. Both support unity
+channel remapping/duplication. Weighted gains/conversion presets require a native
+processing backend and stay disabled where unavailable.
+
+1. Choose the source and destination on Routes and add the route.
+2. Open Channel Matrix. The matrix uses the endpoints' actual reported channels.
+3. Click Load preset for Identity, or double-click cells to connect/disconnect.
+4. Click Apply to selected route and confirm. A unique route matching the chosen
+   source/destination is found automatically if no route row is selected.
+
+On PulseAudio, applying restarts only this route. Summing can clip, unmapped
+outputs are silent, and the fallback allows at most 64 connections. Internal
+helper sinks/monitors are hidden from A2Router's device selectors. If a server
+rejects module loading, the route reports the error and partial resources are
+cleaned up. No sudo or Windows installation is needed.

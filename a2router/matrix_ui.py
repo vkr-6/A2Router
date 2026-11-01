@@ -57,7 +57,7 @@ class MatrixEditor(QWidget):
             self.preset.clear()
             self.preset.addItems(["Identity", "Stereo swap"])
             self.preset.setToolTip(
-                "Native port links: unity remapping and duplication; per-link gain/DSP is unavailable"
+                "Audio-server remapping and duplication use unity gain; per-link gain/DSP is unavailable"
             )
         row.addWidget(self.preset)
         self.conversion_level = QComboBox()
@@ -77,10 +77,11 @@ class MatrixEditor(QWidget):
         self.gain.setSuffix(" dB")
         row.addWidget(self.gain)
         set_gain = QPushButton("Set selected gains")
+        self.gain_button = set_gain
         set_gain.clicked.connect(self.apply_gain)
         set_gain.setEnabled(window.backend.capabilities().get("channel_gain", True))
         set_gain.setToolTip(
-            "Per-link gain requires a processing backend; native PipeWire links use unity gain"
+            "Per-link gain requires a processing backend; audio-server channel maps use unity gain"
         )
         self.gain.setEnabled(window.backend.capabilities().get("channel_gain", True))
         row.addWidget(set_gain)
@@ -109,9 +110,9 @@ class MatrixEditor(QWidget):
         self.state = QLabel()
         self.state.setWordWrap(True)
         layout.addWidget(self.state)
-        self.setEnabled(window.backend.capabilities().get("channel_routing", False))
+        self.mapping_buttons = [apply_preset, remove, load, apply]
         self.setToolTip(
-            "Uses native processing on Windows or unity port links on PipeWire; changing a device's channel count still requires stopping its routes."
+            "Windows processing, PipeWire port links or PulseAudio remap modules; device format changes require stopping its routes."
         )
         window.source.currentIndexChanged.connect(self.refresh)
         window.destination.currentIndexChanged.connect(self.refresh)
@@ -136,7 +137,15 @@ class MatrixEditor(QWidget):
 
     def refresh(self, *_):
         w = self.window
-        self.setEnabled(w.backend.capabilities().get("channel_routing", False))
+        capabilities = w.backend.capabilities()
+        capable = capabilities.get("channel_routing", False)
+        self.grid.setEnabled(capable)
+        w.channel_group.setEnabled(capable)
+        for button in self.mapping_buttons:
+            button.setEnabled(capable)
+        self.conversion_level.setEnabled(capable and capabilities.get("channel_gain", True))
+        self.gain.setEnabled(capable and capabilities.get("channel_gain", True))
+        self.gain_button.setEnabled(self.gain.isEnabled())
         for selector, original in (
             (self.source_selector, w.source),
             (self.destination_selector, w.destination),
@@ -173,8 +182,16 @@ class MatrixEditor(QWidget):
                 if item.text() != text:
                     item.setText(text)
         self.state.setText(
-            f"{source.get('name', 'No source')} → {dest.get('name', 'No output')} | "
-            "Unmapped outputs are silent. Presets and matrix edits change the draft until Add route or Apply."
+            (
+                f"{source.get('name', 'No source')} → {dest.get('name', 'No output')} | "
+                f"{capabilities.get('channel_routing_reason', '')} "
+                "Double-click cells to connect/disconnect. Use Load preset for identity. "
+                "Edits are drafts until Add route or Apply; unmapped outputs are silent."
+            )
+            if capable
+            else capabilities.get(
+                "channel_routing_reason", "Channel mapping is unavailable with this backend"
+            )
         )
 
     def connect_cell(self, source, dest, gain):
@@ -194,7 +211,7 @@ class MatrixEditor(QWidget):
         if existing:
             w.channel_table.removeRow(existing[0])
         else:
-            self.connect_cell(row, col, self.gain.value())
+            self.connect_cell(row, col, self.gain.value() if self.gain.isEnabled() else 0)
         self.refresh()
 
     def apply_gain(self):
@@ -271,7 +288,17 @@ class MatrixEditor(QWidget):
     def selected_route(self):
         selected = self.window.route_tree.selectedItems()
         if not selected:
-            self.window.error.setText("Select a route in Routing Configuration first")
+            matches = [
+                r
+                for r in self.window.view_routes.values()
+                if (r["source_id"], r["destination_id"])
+                == (self.window.source.currentData(), self.window.destination.currentData())
+            ]
+            if len(matches) == 1:
+                return matches[0]
+            self.window.error.setText(
+                "Select a route on the Routes tab, or add one for these endpoints first"
+            )
             return None
         return self.window.view_routes.get(selected[0].data(0, Qt.UserRole))
 
