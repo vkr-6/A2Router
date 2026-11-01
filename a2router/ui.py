@@ -64,7 +64,8 @@ class MainWindow(QMainWindow):
         self._poll_error = ""
         self._vbcable_page = self.backend.capabilities().get("virtual_device_provider") == "VB-CABLE"
         self.setWindowTitle("A2Router — Advanced Audio Router")
-        self.setWindowIcon(QIcon(str(Path(__file__).parent / "assets/a2router.svg")))
+        self.setWindowIcon(QIcon(str(Path(__file__).parent / "assets/a2router.png")))
+        QApplication.instance().setWindowIcon(self.windowIcon())
         self.resize(1280, 720)
         self.setMinimumSize(1000, 620)
         self.buttons = []

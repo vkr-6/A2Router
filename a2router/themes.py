@@ -7,6 +7,7 @@ from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import QApplication
 
 THEMES = {
+    "Orange": ("#191715", "#211e1b", "#2a2520", "#faf7f2", "#302820", "#504236", "#ff9600"),
     "White": ("#ffffff", "#ffffff", "#f4f6f8", "#161b22", "#f0f2f5", "#d1d7de", "#3157c8"),
     "Dark": ("#141618", "#1b1e21", "#22262a", "#edf0f2", "#262a2f", "#383e45", "#a9db4e"),
     "Lime": ("#111811", "#19221a", "#202d21", "#eff8e9", "#253527", "#3e5140", "#c2ef62"),
@@ -21,7 +22,7 @@ def apply_theme(window, name, density):
         name = "White"  # Migrate the previous preference without touching profiles.
     if name == "System":
         name = "Dark" if app.styleHints().colorScheme() == Qt.ColorScheme.Dark else "White"
-    bg, base, alternate, text, button, border, accent = THEMES.get(name, THEMES["Dark"])
+    bg, base, alternate, text, button, border, accent = THEMES.get(name, THEMES["Orange"])
     selected_text = "#101510" if name != "White" else "#ffffff"
     muted = "#90989f" if name != "White" else "#68717c"
     palette = QPalette()

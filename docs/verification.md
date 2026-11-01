@@ -163,3 +163,19 @@ Application sources and live channel configuration (2026-11-01):
   Ubuntu 24.04/glibc 2.39 or compatible.
   No Windows executable was generated locally; use the manual Windows workflow
   to compile and test the updated bridge before trying application capture.
+
+Supplied PNG branding and Orange default (2026-11-01):
+
+- Replaced the recreated SVG assets with the exact supplied clean logo.png, stored
+  as a2router/assets/a2router.png. Source and bundled asset SHA256 match. Window,
+  application and tray icons share this asset; Windows ICO generation preserves
+  its proportions at seven sizes. Linux desktop packaging installs the PNG in
+  /usr/share/pixmaps. README displays it at 128 pixels wide.
+- Orange is the default for new preferences, with an orange accent and warm dark
+  surfaces. Existing saved theme selections and the other theme options remain.
+- Full Python/Qt suite: 188 passed, 14 skipped. Ruff check/format and git diff
+  checks passed. Isolated new-preference GUI smoke confirmed Orange/#ff9600 and
+  nonempty application/window icons. All seven generated ICO PNG entries decoded
+  successfully on Linux. No Windows software was installed or changed.
+- Linux tar.gz and .deb rebuilt; both SHA256 checks passed. The portable archive
+  contains the byte-identical supplied PNG and no superseded SVG logos.

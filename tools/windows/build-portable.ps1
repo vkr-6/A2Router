@@ -90,7 +90,7 @@ if (!$SkipTests) {
 Remove-Item Env:\A2ROUTER_WASAPI_DLL -ErrorAction SilentlyContinue
 if (Test-Path "$Workspace\dist") { Remove-Item "$Workspace\dist" -Recurse -Force }
 New-Item -ItemType Directory -Force "$Workspace\dist" | Out-Null
-& $python tools/windows/make_icon.py a2router/assets/a2router.svg "$Workspace/build/a2router.ico"
+& $python tools/windows/make_icon.py a2router/assets/a2router.png "$Workspace/build/a2router.ico"
 if ($LASTEXITCODE) { throw 'Application icon generation failed' }
 & $python -m PyInstaller --noconfirm --clean --onefile --windowed --name a2router --icon "$Workspace/build/a2router.ico" --hidden-import PySide6.QtSvg --hidden-import numpy.fft --add-data "$Workspace/a2router/assets;a2router/assets" --paths $Workspace --add-binary "$native\a2router_wasapi.dll;." --distpath "$Workspace\dist" --workpath "$Workspace\build\pyinstaller" --specpath "$Workspace\build" tools\windows\portable_entry.py
 if ($LASTEXITCODE) { throw 'Freezing the GUI application failed' }

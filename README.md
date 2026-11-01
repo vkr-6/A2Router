@@ -1,6 +1,6 @@
 # A2Router — Advanced Audio Router
 
-![A2Router](a2router/assets/wordmark.svg)
+<img src="a2router/assets/a2router.png" alt="A2Router logo" width="128">
 
 Portable audio routing for Windows WASAPI and native Linux PipeWire desktops.
 Python/PySide6 provides the interface; native audio transport stays in C++ or the
@@ -23,7 +23,7 @@ Developed with **OpenAI Codex** under the project owner's direction.
   confidence/spread, cancellation and reviewed compensation. Measurement does not
   automatically apply delays. Native Windows playback/capture needs hardware testing.
 - **Diagnostics:** actual backend observations, action/error log and reviewed export.
-- **Settings:** complete White, Dark, Lime, Blue, Violet and system-following themes.
+- **Settings:** Orange by default, plus White, Dark, Lime, Blue, Violet and system-following themes.
   Profiles appear only in **File** (New/Open/Save/Save As/Recent profiles).
 
 ![Routing](docs/images/clean-routing.png)

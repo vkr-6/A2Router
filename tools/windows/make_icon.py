@@ -1,17 +1,16 @@
-"""Render the source SVG into a Windows icon using the existing Qt dependency."""
+"""Package the supplied PNG as a multiresolution Windows icon, preserving its aspect ratio."""
 
 import struct
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRectF
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Qt
 from PySide6.QtGui import QImage, QPainter
-from PySide6.QtSvg import QSvgRenderer
 
 
 def create(source, destination):
-    renderer = QSvgRenderer(str(source))
-    if not renderer.isValid():
+    original = QImage(str(source))
+    if original.isNull():
         raise ValueError("Invalid application logo")
     sizes = (16, 24, 32, 48, 64, 128, 256)
     entries, payloads = [], []
@@ -20,7 +19,8 @@ def create(source, destination):
         image = QImage(size, size, QImage.Format_ARGB32)
         image.fill(0)
         painter = QPainter(image)
-        renderer.render(painter, QRectF(0, 0, size, size))
+        scaled = original.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        painter.drawImage((size - scaled.width()) // 2, (size - scaled.height()) // 2, scaled)
         painter.end()
         data = QByteArray()
         buffer = QBuffer(data)

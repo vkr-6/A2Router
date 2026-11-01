@@ -36,9 +36,9 @@ def package(bundle, output, version="0.1.0", deb=True):
             desktop.write_text(
                 "[Desktop Entry]\nType=Application\nName=A2Router\nComment=Advanced audio routing\nExec=a2router\nIcon=a2router\nTerminal=false\nCategories=AudioVideo;Audio;Mixer;\n"
             )
-            icon = stage / "usr/share/icons/hicolor/scalable/apps/a2router.svg"
+            icon = stage / "usr/share/pixmaps/a2router.png"
             icon.parent.mkdir(parents=True)
-            shutil.copy2(root / "a2router/assets/a2router.svg", icon)
+            shutil.copy2(root / "a2router/assets/a2router.png", icon)
             control = stage / "DEBIAN/control"
             control.parent.mkdir()
             size = math.ceil(sum(p.stat().st_size for p in stage.rglob("*") if p.is_file()) / 1024)

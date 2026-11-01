@@ -240,7 +240,7 @@ def test_telemetry_update_does_not_overwrite_volume_editor_draft(app):
         shutdown(app, window)
 
 
-@pytest.mark.parametrize("theme", ["White", "Dark", "Lime", "Blue", "Violet", "System"])
+@pytest.mark.parametrize("theme", ["Orange", "White", "Dark", "Lime", "Blue", "Violet", "System"])
 def test_compact_workspace_controls_remain_visible_at_target_size(app, theme):
     backend = MockBackend()
     window = MainWindow(Controller(backend))
