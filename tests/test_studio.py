@@ -310,9 +310,17 @@ def test_emergency_discards_queued_restart_and_stops_after_active_poll(app):
         shutdown(app, window)
 
 
-def test_theme_and_table_layout_survive_window_restart(app):
+def test_theme_and_table_layout_survive_window_restart(app, tmp_path, monkeypatch):
+    from PySide6.QtGui import QPalette
+
+    settings = QSettings(str(tmp_path / "branding.ini"), QSettings.IniFormat)
+    settings.setValue("theme", "Dark")  # A preference saved before the branding update.
+    monkeypatch.setattr("a2router.studio.QSettings", lambda *args: settings)
     first = MainWindow(Controller(MockBackend()))
     wait(app, first)
+    assert first.studio.theme.currentText() == "Orange"
+    assert first.palette().color(QPalette.Highlight).name() == "#ff9600"
+    assert settings.value("orangeBrandingV1", False, type=bool)
     first.studio.theme.setCurrentText("Dark")
     first.studio.output_table.view.setColumnWidth(0, 267)
     first.studio.output_table.view.setColumnHidden(2, True)

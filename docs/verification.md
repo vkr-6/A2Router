@@ -189,3 +189,18 @@ Windows SDK GUID declaration build fix (2026-11-01):
   tests, Ruff and git diff checks passed. MSVC compilation must be verified by
   rerunning the manual Windows workflow; no Windows compiler was installed and
   no Windows settings, drivers or software were changed.
+
+Branding follow-up: mark-only icons and upgrade theme activation (2026-11-01):
+
+- The prior change preserved existing saved themes, so upgraded installations could
+  still open in Dark/System. This update migrates existing preferences to Orange
+  once, records orangeBrandingV1, and preserves choices made afterwards. A Qt
+  regression test starts with a saved Dark preference, verifies the orange
+  highlight, then verifies a newly chosen Dark theme survives restart.
+- Application, tray, executable/setup and Linux desktop icons now use only the
+  original PNG's orbital-A mark, cropped without redrawing it. The complete
+  supplied PNG is retained byte-for-byte as assets/wordmark.png for README
+  branding at 128 pixels wide. No SVG reconstruction is used.
+- Full Python/Qt suite: 188 passed, 14 skipped. Ruff and diff checks passed.
+  Seven mark-only ICO sizes decoded successfully. Linux tar.gz/.deb rebuilt,
+  both checksum checks passed, and both PNG variants verified in the archive.

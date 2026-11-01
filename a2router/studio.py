@@ -195,6 +195,12 @@ class Studio:
         self.theme = QComboBox()
         self.theme.addItems(["Orange", "System", "White", "Dark", "Lime", "Blue", "Violet"])
         saved_theme = self.settings.value("theme", "Orange")
+        # Apply the new branding once to upgraded installs as well as fresh ones.
+        # Later explicit theme selections remain persistent.
+        if not self.settings.value("orangeBrandingV1", False, type=bool):
+            saved_theme = "Orange"
+            self.settings.setValue("theme", saved_theme)
+            self.settings.setValue("orangeBrandingV1", True)
         self.theme.setCurrentText("White" if saved_theme == "Light" else saved_theme)
         self.theme.currentTextChanged.connect(self.apply_theme)
         form.addRow("Theme", self.theme)

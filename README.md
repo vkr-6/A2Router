@@ -1,6 +1,6 @@
 # A2Router — Advanced Audio Router
 
-<img src="a2router/assets/a2router.png" alt="A2Router logo" width="128">
+<img src="a2router/assets/wordmark.png" alt="A2Router logo" width="128">
 
 Portable audio routing for Windows WASAPI and native Linux PipeWire desktops.
 Python/PySide6 provides the interface; native audio transport stays in C++ or the
