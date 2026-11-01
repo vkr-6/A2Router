@@ -31,12 +31,20 @@ def main():
     ):
         if not hasattr(bridge, name):
             raise SystemExit(f"Native bridge is missing {name}")
-    for name in ("ar_routing_controls_version", "ar_calibration_version"):
+    for name in (
+        "ar_routing_controls_version",
+        "ar_calibration_version",
+        "ar_application_api_version",
+        "ar_live_matrix_version",
+    ):
         function = getattr(bridge, name)
         function.argtypes, function.restype = [], ctypes.c_int
         if function() != 1:
             raise SystemExit(f"Unsupported native extension: {name}")
     for name in (
+        "ar_application_capture_supported",
+        "ar_applications",
+        "ar_source_set_matrix",
         "ar_source_start_config",
         "ar_source_set_volume",
         "ar_calibration_record",

@@ -31,3 +31,27 @@ Routing no longer embeds device inventory or informational processing/monitor ta
 Native calibration preallocates capture storage, generates a finite windowed chirp, records microphone PCM with QPC timestamps, and handles cancellation with a lock-free atomic. Offline NumPy FFT correlation, pass rejection and compensation calculations run on the serialized worker. A controller gate restores desired routing after ordinary measurement, while explicit panic/Exit suppress restoration. Calibration metadata and optional stream volume/mute fields extend version-1 profiles; old profiles retain defaults. Synthetic recordings exist only in tests/previews, never as a production fallback.
 
 Linux packaging freezes the runtime and emits tar.gz/.deb without installing anything. External pactl calls use the original host library path rather than PyInstaller libraries. Windows setup embeds the already-built portable payload and uses the existing vendor helper only after explicit task/uninstall checkbox selection.
+
+## Application sources and live maps
+
+Application sources reuse Device and Route definitions; profile version 1 remains
+valid. Windows application keys contain executable identity, while the native
+binding carries PID plus creation time. The active binding is stopped before
+replacing it. Process-tree ancestry excludes the router itself; known original
+playback endpoints are rejected as copy destinations. The public process-loopback
+API is runtime-gated to build 20348+ and requests stereo 48 kHz float PCM. Endpoint
+capture retains its existing code path.
+
+PipeWire application keys use executable identity; fresh node/port serials supply
+transport resources. The graph backend creates links with exact owner/route UUID
+properties, verifies them, and freshly resolves serials before deletion. It keeps
+original client connections intact. Live unity maps change only the selected
+route's links. Per-link DSP gain and extra delay on native links are rejected.
+Device-level loopback latency targets remain separate.
+
+Windows live matrices publish an atomic pointer to control-thread-owned immutable
+maps. All versions remain alive until stop, so the render callback performs no
+allocation/deallocation for updates. History is bounded at 128 edits per output.
+A preallocated scratch buffer permits compatible default float paths to enable
+mapping live; other formats need explicit restart/negotiation. Stable output IDs
+are resolved under the engine mutex to avoid retargeting after hotplug.

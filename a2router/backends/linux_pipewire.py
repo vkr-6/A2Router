@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -31,7 +32,7 @@ def system_audio_environment():
 class PipeWireBackend(AudioBackend):
     name = "PipeWire-Pulse (pactl)"
 
-    def __init__(self, runner=None, owner=None):
+    def __init__(self, runner=None, owner=None, graph_runner=None):
         super().__init__()
         self.runner = runner or self._run
         identity = f"{Path.home()}:{getattr(os, 'getuid', lambda: os.environ.get('USERNAME', 'user'))()}"
@@ -41,6 +42,13 @@ class PipeWireBackend(AudioBackend):
         self.stale_resources = []
         self.sink_inputs = []
         self.source_outputs = []
+        from a2router.backends.pipewire_graph import PipeWireGraph
+
+        if graph_runner is None and runner is None and all(shutil.which(t) for t in ("pw-dump", "pw-link")):
+            graph_runner = self._graph_run
+        self.graph = PipeWireGraph(graph_runner, self.owner) if graph_runner else None
+        self.graph_available = False
+        self.graph_error = ""
 
     def capabilities(self):
         match = re.search(r"PipeWire (\d+)\.(\d+)\.(\d+)", self.server.get("server_name", ""))
@@ -49,10 +57,36 @@ class PipeWireBackend(AudioBackend):
             **super().capabilities(),
             "device_controls": True,
             "meters": False,
+            "applications": self.graph_available,
+            "channel_routing": self.graph_available,
+            "channel_gain": False,
+            "live_channel_routing": self.graph_available,
+            "graph_route_delay": False,
             "route_delay": delay,
             "live_route_delay": False,
             "latency_control": "PipeWire latency target; changing an active route requires its restart",
         }
+
+    @staticmethod
+    def _graph_run(args):
+        try:
+            result = subprocess.run(
+                args, capture_output=True, text=True, timeout=8, env=system_audio_environment(), check=False
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise BackendError(f"PipeWire graph tools unavailable: {exc}") from exc
+        if result.returncode:
+            raise BackendError(result.stderr.strip() or "PipeWire graph operation failed")
+        return result.stdout
+
+    def _validate_route(self, route, allow_missing=False):
+        super()._validate_route(route, allow_missing)
+        if route.delay_ms and (route.channel_map or route.source_id.startswith("pw-application:")):
+            raise BackendError(
+                "Native application/channel links do not support extra delay; reset delay to zero first"
+            )
+        if any(c["gain"] != 1 for c in route.channel_map):
+            raise BackendError("Native PipeWire channel links support unity gain only")
 
     @staticmethod
     def _run(args):
@@ -164,6 +198,15 @@ class PipeWireBackend(AudioBackend):
         source_outputs = self._json("list", "source-outputs")
         self.server, self.devices, self.modules = info, devices, modules
         self.sink_inputs, self.source_outputs = sink_inputs, source_outputs
+        self.graph_available = False
+        if self.graph and "pipewire" in info.get("server_name", "").lower():
+            try:
+                self.graph.refresh()
+                self.graph.verify_server(info)
+                self.devices.update(self.graph.applications())
+                self.graph_available, self.graph_error = True, ""
+            except BackendError as exc:
+                self.graph_error = str(exc)
         server_name = info.get("server_name", "unknown")
         self.name = f"{'PipeWire-Pulse' if 'pipewire' in server_name.lower() else 'PulseAudio compatibility'}: {server_name}"
 
@@ -339,6 +382,16 @@ class PipeWireBackend(AudioBackend):
 
     def _connect(self, route):
         UUID(route.id)
+        if route.channel_map or route.source_id.startswith("pw-application:"):
+            if not self.graph_available:
+                raise BackendError(
+                    "Application/channel routing requires pw-dump and pw-link with a native PipeWire session"
+                )
+            self._unload("route", route.id)
+            self.graph.connect(route, self.devices)
+            return
+        if self.graph_available:
+            self.graph.disconnect(route.id)
         source = self.devices[route.source_id]
         props = f"a2router.owner={self.owner} a2router.route={route.id} media.name=a2router"
         module = self._load(
@@ -372,6 +425,9 @@ class PipeWireBackend(AudioBackend):
         live = route.enabled and self.transport_running and bool(self._find("route", route.id))
         if live and not allow_restart:
             raise BackendError("Changing this latency target requires restarting the selected route")
+        from dataclasses import replace
+
+        self._validate_route(replace(route, delay_ms=delay_ms), allow_missing=True)
         previous = route.delay_ms
         self._disconnect(route)
         route.delay_ms = delay_ms
@@ -386,6 +442,10 @@ class PipeWireBackend(AudioBackend):
 
     def _disconnect(self, route):
         self._unload("route", route.id)
+        if self.graph_available or any(r.startswith("link:") for r in route.resource_ids):
+            if not self.graph:
+                raise BackendError("Graph cleanup is unavailable; preserve route definitions and retry")
+            self.graph.disconnect(route.id)
         route.resource_ids = []
 
     def refresh(self, reconcile=True):
@@ -400,6 +460,15 @@ class PipeWireBackend(AudioBackend):
             return
         if not reconcile:
             for route in self.routes.values():
+                if route.channel_map or route.source_id.startswith("pw-application:"):
+                    links = self.graph.owned(route.id) if self.graph_available else []
+                    route.resource_ids = [self.graph.resource(link) for link in links]
+                    connected = self.graph_available and self.graph.healthy(route, self.devices)
+                    route.status = "connected" if connected else "pending" if route.enabled else "disabled"
+                    route.error = (
+                        "" if connected or not route.enabled else "Application/channel graph unavailable"
+                    )
+                    continue
                 modules = self._find("route", route.id)
                 route.resource_ids = [str(m["index"]) for m in modules]
                 if modules and all(self._route_ok(route, m) for m in modules):
@@ -445,10 +514,18 @@ class PipeWireBackend(AudioBackend):
         self.stale_resources = [
             str(m["index"]) for m in self.modules if self._owned(m) and str(m["index"]) not in known
         ]
+        if self.graph_available:
+            self.stale_resources.extend(
+                self.graph.resource(link)
+                for link in self.graph.owned()
+                if link.get("info", {}).get("props", {}).get("a2router.route") not in self.routes
+            )
 
     def cleanup_owned(self):
         """Explicitly requested cleanup, including orphaned modules after a crash."""
         self.modules = self._modules()
+        if self.graph_available:
+            self.graph.disconnect()
         for name in ("module-loopback", "module-null-sink"):
             for m in list(self.modules):
                 if m["name"] == name and self._owned(m):
@@ -464,6 +541,11 @@ class PipeWireBackend(AudioBackend):
         return {
             **super().diagnostics(),
             "server": self.server,
+            "application_graph_error": self.graph_error,
+            "channel_processing": "Native PipeWire unity links; original application output is retained",
+            "owned_channel_links": [self.graph.resource(link) for link in self.graph.owned()]
+            if self.graph_available
+            else [],
             "stale_owned_modules": self.stale_resources,
             "processing": "Server PCM mixing/rate conversion may occur. Bit-perfect transport is not verified.",
             "monitoring": "GUI subscribes to pactl events with 250 ms debounce; 3 second polling fallback",

@@ -545,3 +545,34 @@ def test_conversion_presets_activate_real_route_definition(
         assert next(c["gain"] for c in route.channel_map if c["source"] == 0 and c["destination"] == 0) == 1
     finally:
         shutdown(app, window)
+
+
+def test_application_source_filter_and_route_channel_action(app, tmp_path, monkeypatch):
+    from a2router.models import LAYOUTS, Device
+
+    backend = MockBackend()
+    backend.devices["application:player"] = Device(
+        "application:player",
+        "Player · application copy",
+        "input",
+        True,
+        channels=2,
+        positions=LAYOUTS["stereo"],
+        properties={"application_capture": True},
+    )
+    window = MainWindow(Controller(backend), tmp_path / "app-route.json")
+    try:
+        wait(app, window)
+        window.source_scope.setCurrentIndex(window.source_scope.findData("applications"))
+        assert window.source.count() == 1 and window.source.currentData() == "application:player"
+        window.destination.setCurrentIndex(window.destination.findData("speakers"))
+        window.add_route()
+        wait(app, window)
+        assert len(backend.routes) == 1
+        window.route_tree.topLevelItem(0).setSelected(True)
+        window.edit_channels_button.click()
+        assert window.studio.routing_tabs.currentWidget() is window.studio.matrix
+        assert window.source.currentData() == "application:player"
+        assert window.studio.matrix.grid.rowCount() == 2
+    finally:
+        shutdown(app, window)

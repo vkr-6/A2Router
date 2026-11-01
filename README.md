@@ -101,9 +101,9 @@ python -m a2router gui
 bash tools/linux/build.sh
 ```
 
-See [Linux package dependencies](tools/linux/README.txt). Windows-only calibration,
-stream controls and channel matrices are capability-gated on Linux; existing
-PipeWire device routing, mixing, virtual sinks and endpoint volume/mute remain.
+See [Linux package dependencies](tools/linux/README.txt). Windows-only calibration and per-link DSP gains are capability-gated on Linux.
+Native PipeWire application copies and live unity channel links are available
+when `pw-dump` and `pw-link` can access the session graph.
 
 ## Channel conversion and calibration
 
@@ -181,6 +181,42 @@ runs the installer from this action. Driver options are not changed automaticall
 
 Linux PipeWire 1.0+ now exposes a per-route server latency target with explicit
 permission to restart that route. This is a server buffering request, not measured
-acoustic alignment. Linux custom channel matrices, acoustic calibration and
-per-route DSP/gain remain unsupported; endpoint volume/mute, virtual sinks,
+acoustic alignment. Linux matrices support unity port remapping/duplication; per-link DSP gains and
+acoustic calibration remain unsupported. Endpoint volume/mute, virtual sinks,
 fan-out, many-source server mixing and profiles are supported.
+
+## Application routing and live channels
+
+Start audio in an application, refresh, then choose **Sources → Applications** in
+Audio Routing. Add one route per additional output. Sources are remembered by
+executable identity and return to pending when the app closes. Copies preserve
+the application's existing playback; selecting its original output would double
+audio, so known original outputs are rejected. PipeWire refuses to adopt an existing unrelated port connection.
+Known original Windows playback endpoints are rejected as copy destinations to
+avoid duplication. Router processes and their ancestors are excluded to prevent
+self-capture loops. No system defaults or per-application preferred endpoints are changed.
+
+Windows uses the public process-loopback API on **Windows build 20348 or newer**
+(Windows 11 and qualifying Server builds). Older Windows 10 desktops retain
+endpoint/cable routing. Capture requests stereo 48 kHz float PCM and includes the
+selected process tree; protected/inaccessible apps may not be captured. A stable
+path rule follows one process tree and retains its binding while available;
+independent instances are not combined. New native exports require rebuilding
+the DLL. Application routing on Windows has not been hardware-verified here.
+
+On native PipeWire, applications with playback nodes are copied using tagged
+port links. Original links stay connected. Multiple streams of the same executable
+are grouped when their channel layouts agree. Basic remapping, duplication and
+summing use unity links; per-link gain/downmix DSP is available on Windows only.
+Graph application/channel routes cannot apply the loopback latency target.
+
+Select a route and click **Channels…** to load its matrix. Windows updates compatible float paths and existing
+custom matrices live without restarting the source or other outputs. Matching
+float/channel layouts accept the first live map too. Integer-format conversion or
+changing device channel counts requires a restart to negotiate the format. Retained matrix versions are bounded to 128
+live edits per output; stop/start clears this history. PipeWire edits replace only
+the selected route's owned links. Profiles keep the same version-1 schema.
+
+Workflow reference: [AppAudioRouter](https://github.com/Eververdants/AppAudioRouter).
+The Windows implementation follows Microsoft's public
+[process-loopback API](https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ns-audioclientactivationparams-audioclient_activation_params).

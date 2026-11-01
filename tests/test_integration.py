@@ -91,6 +91,16 @@ def test_server_layouts_fanout_mixing_restore_cleanup(tmp_path):
         restarted.refresh()
         assert len([m for m in restarted.modules if restarted._owned(m)]) == resource_count
         assert all(r.status == "connected" for r in restarted.list_routes())
+        if backend.capabilities().get("channel_routing"):
+            backend.set_route_channel_map(
+                routes[1].id,
+                [
+                    {"source": 0, "destination": 0, "gain": 1},
+                    {"source": 1, "destination": 1, "gain": 1},
+                ],
+            )
+            assert routes[1].status == "connected", routes[1].error
+            assert all(resource.startswith("link:") for resource in routes[1].resource_ids)
         # Verify actual PCM traverses a managed route, not just that a module exists.
         if os.environ.get("A2ROUTER_PCM_TEST") == "1":
             verify_pcm(stereo, output_b)
@@ -257,6 +267,187 @@ def test_gui_controls_real_server(tmp_path, monkeypatch):
             time.sleep(0.01)
         backend.cleanup_owned()
         assert not any(backend._owned(m) for m in backend.modules)
+
+
+def test_application_copy_isolation_fanout_live_mapping_and_reconnect(tmp_path):
+    import shutil
+    import subprocess
+
+    import numpy as np
+
+    backend = PipeWireBackend(owner="test_" + uuid4().hex)
+    backend.refresh()
+    if not backend.capabilities().get("applications"):
+        pytest.skip("Native application copies require pw-dump and pw-link")
+    definitions = [
+        VirtualDevice(name) for name in ("Original apps", "Application copy A", "Application copy B")
+    ]
+    children = []
+    rate = 48000
+    target_file, other_file = tmp_path / "target.pcm", tmp_path / "other.pcm"
+    timeline = np.arange(rate * 24, dtype=np.float32) / rate
+    np.column_stack(
+        (0.1 * np.sin(2 * np.pi * 431 * timeline), 0.1 * np.sin(2 * np.pi * 997 * timeline))
+    ).astype("<f4").tofile(target_file)
+    np.column_stack((0.1 * np.sin(2 * np.pi * 1699 * timeline),) * 2).astype("<f4").tofile(other_file)
+    target_binary = shutil.which("pacat")
+    other_binary = tmp_path / "different-player"
+    shutil.copy2(target_binary, other_binary)
+    other_binary.chmod(0o755)
+
+    def play(binary, pcm, name):
+        with pcm.open("rb") as stream:
+            process = subprocess.Popen(
+                [
+                    str(binary),
+                    "--playback",
+                    "--raw",
+                    "--format=float32le",
+                    "--rate=48000",
+                    "--channels=2",
+                    "--latency-msec=40",
+                    "--device=" + definitions[0].device_id[5:],
+                    "--property=application.name=" + name,
+                ],
+                stdin=stream,
+            )
+        children.append(process)
+        return process
+
+    def wait_routes(ident=None):
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            backend.refresh()
+            names = [d.name for d in backend.list_devices() if d.properties.get("application_capture")]
+            if ident is None and all(
+                any(label in name for name in names) for label in ("target player", "unrelated player")
+            ):
+                return
+            if ident is not None and all(r.status == "connected" for r in backend.list_routes()):
+                return
+            time.sleep(0.05)
+        raise AssertionError(backend.diagnostics())
+
+    def amplitudes(config):
+        path = tmp_path / "captured.pcm"
+        with path.open("wb") as recording:
+            process = subprocess.Popen(
+                [
+                    "parec",
+                    "--raw",
+                    "--format=float32le",
+                    "--rate=48000",
+                    "--channels=2",
+                    "--latency-msec=20",
+                    "--device=" + config.device_id[5:] + ".monitor",
+                ],
+                stdout=recording,
+            )
+            try:
+                time.sleep(1.3)
+            finally:
+                process.terminate()
+                process.wait(timeout=5)
+        samples = np.fromfile(path, dtype="<f4").reshape(-1, 2)[rate // 4 :]
+        assert len(samples) > rate // 4
+        t = np.arange(len(samples)) / rate
+        return {
+            frequency: np.abs(np.mean(samples * np.exp(-2j * np.pi * frequency * t)[:, None], axis=0)) * 2
+            for frequency in (431, 997, 1699)
+        }
+
+    try:
+        for config in definitions:
+            backend.create_virtual_device(config)
+        target = play(target_binary, target_file, "A2 target player")
+        play(other_binary, other_file, "A2 unrelated player")
+        wait_routes()
+        application = next(
+            d
+            for d in backend.list_devices()
+            if d.properties.get("application_capture") and "target player" in d.name
+        )
+        original_sink = next(
+            s["sink"]
+            for s in backend.sink_inputs
+            if s.get("properties", {}).get("application.name") == "A2 target player"
+        )
+        routes = [backend.create_route(application.id, d.device_id) for d in definitions[1:]]
+        assert all(r.status == "connected" for r in routes), backend.diagnostics()
+        unchanged_links = [list(r.resource_ids) for r in routes]
+        with pytest.raises(BackendError, match="do not support extra delay|Latency targets require PipeWire"):
+            backend.set_route_delay(routes[0].id, 20, allow_restart=True)
+        assert [r.resource_ids for r in routes] == unchanged_links
+        original_audio = amplitudes(definitions[0])
+        assert min(original_audio[1699]) > 0.04  # The unrelated app is actually producing audio.
+        initial = amplitudes(definitions[1])
+        assert initial[431][0] > 0.04 and initial[997][1] > 0.04
+        assert max(initial[1699]) < 0.005  # Unrelated software was not copied.
+        other_links = list(routes[1].resource_ids)
+        backend.set_route_channel_map(
+            routes[0].id,
+            [
+                {"source": 0, "destination": 1, "gain": 1},
+                {"source": 1, "destination": 0, "gain": 1},
+            ],
+        )
+        swapped = amplitudes(definitions[1])
+        assert swapped[997][0] > 0.04 and swapped[431][1] > 0.04
+        assert routes[1].resource_ids == other_links and target.poll() is None
+        unchanged = amplitudes(definitions[2])
+        assert unchanged[431][0] > 0.04 and unchanged[997][1] > 0.04
+        backend.refresh()
+        assert (
+            next(
+                s["sink"]
+                for s in backend.sink_inputs
+                if s.get("properties", {}).get("application.name") == "A2 target player"
+            )
+            == original_sink
+        )
+        if os.environ.get("A2ROUTER_FROZEN_APP"):
+            import json
+
+            report_path = tmp_path / "frozen-app-discovery.json"
+            environment = {
+                **os.environ,
+                "XDG_CONFIG_HOME": str(tmp_path / "frozen-settings"),
+                "QT_QPA_PLATFORM": "offscreen",
+            }
+            subprocess.run(
+                [os.environ["A2ROUTER_FROZEN_APP"], "--self-test", str(report_path)],
+                env=environment,
+                cwd=tmp_path,
+                check=True,
+                timeout=45,
+            )
+            report = json.loads(report_path.read_text())
+            assert not report["simulated"] and report["backend"]["capabilities"]["applications"]
+            assert all(report["checks"].values())
+        saved = Controller(backend).snapshot()
+        replacement = PipeWireBackend(owner=backend.owner)
+        assert Controller(replacement).restore(saved) == []
+        assert all(r.status == "connected" for r in replacement.list_routes())
+        target.terminate()
+        target.wait(timeout=5)
+        backend.refresh()
+        assert all(r.status == "pending" for r in routes)
+        play(target_binary, target_file, "A2 target player")
+        wait_routes(application.id)
+        assert all(r.status == "connected" for r in routes)
+        assert len(backend.graph.owned()) == 4
+        for route in routes:
+            backend.remove_route(route.id)
+        assert not backend.graph.owned()
+        assert children[-1].poll() is None  # Removing copies preserves original playback.
+    finally:
+        for process in reversed(children):
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=5)
+        backend.cleanup_owned()
+        if backend.graph_available:
+            assert not backend.graph.owned()
 
 
 def test_recovery_after_private_pulse_server_restart():

@@ -6,6 +6,9 @@
 // in this translation unit instead of relying on an SDK import-library symbol.
 // This must precede all SDK headers so DEFINE_PROPERTYKEY sees INITGUID.
 #include <initguid.h>
+#include <audiopolicy.h>
+#include <tlhelp32.h>
+#include "WindowsProcessCapture.h"
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <Audioclient.h>
@@ -16,7 +19,9 @@
 #include "AudioEngine.h"
 #include <algorithm>
 #include <chrono>
+#include <cwchar>
 #include <map>
+#include <set>
 #include <mutex>
 #include <sstream>
 #include <thread>
@@ -187,6 +192,19 @@ bool startSession(const std::wstring& source, bool input, const wchar_t* ids, co
     mux::EngineConfig config;
     config.capture_endpoint_id = source;
     config.capture_from_input = input;
+    if (source.starts_with(L"process:")) {
+        const auto split = source.find(L':', 8);
+        if (split == std::wstring::npos) { error = "Invalid application capture identity"; return false; }
+        try {
+            size_t used = 0;
+            auto pid = std::stoull(source.substr(8, split - 8), &used);
+            if (used != split - 8 || !pid || pid > MAXDWORD || input) throw std::invalid_argument("pid");
+            config.capture_process_id = static_cast<DWORD>(pid);
+            auto stampText = source.substr(split + 1);
+            config.capture_process_stamp = std::stoull(stampText, &used);
+            if (used != stampText.size() || !config.capture_process_stamp) throw std::invalid_argument("stamp");
+        } catch (...) { error = "Invalid application capture identity"; return false; }
+    }
     std::wistringstream lines(ids ? ids : L"");
     std::wistringstream delayLines(delayList ? delayList : L"");
     config.normalize_output_delays = delayList == nullptr;
@@ -589,4 +607,107 @@ API const char* ar_calibration_record(const wchar_t* mic, const wchar_t* output,
         }
         out << "]}"; result = out.str(); error.clear(); return result.c_str();
     } catch (const std::exception& exc) { error = exc.what(); return nullptr; }
+}
+
+// Additive extension v1: existing endpoint-routing ABI remains v2.
+API int ar_application_api_version() { return 1; }
+API int ar_application_capture_supported() { return a2r::processCaptureSupported() ? 1 : 0; }
+API const char* ar_applications() {
+    std::lock_guard<std::mutex> lock(apiMutex);
+    ComScope scope;
+    if (!scope.usable()) { error = "COM initialization failed for application discovery"; return nullptr; }
+    if (!a2r::processCaptureSupported()) { result = "[]"; error.clear(); return result.c_str(); }
+    try {
+        std::map<DWORD, DWORD> parents;
+        HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snapshot != INVALID_HANDLE_VALUE) {
+            PROCESSENTRY32W entry{}; entry.dwSize = sizeof(entry);
+            if (Process32FirstW(snapshot, &entry)) do { parents[entry.th32ProcessID] = entry.th32ParentProcessID; }
+                while (Process32NextW(snapshot, &entry));
+            CloseHandle(snapshot);
+        }
+        std::set<DWORD> routerAncestors;
+        DWORD ancestor = GetCurrentProcessId();
+        for (int depth = 0; depth < 64 && ancestor; ++depth) {
+            if (!routerAncestors.insert(ancestor).second) break;
+            auto parent = parents.find(ancestor);
+            if (parent == parents.end()) break;
+            ancestor = parent->second;
+        }
+        ComPtr<IMMDeviceEnumerator> enumerator;
+        if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator))))
+            throw std::runtime_error("Cannot enumerate application audio endpoints");
+        ComPtr<IMMDeviceCollection> endpoints;
+        if (FAILED(enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &endpoints)))
+            throw std::runtime_error("Cannot enumerate application playback devices");
+        std::map<std::wstring, std::set<DWORD>> applications;
+        std::map<std::pair<std::wstring, DWORD>, std::set<std::wstring>> originalOutputs;
+        UINT count = 0; endpoints->GetCount(&count);
+        for (UINT i = 0; i < count; ++i) {
+            ComPtr<IMMDevice> endpoint;
+            if (FAILED(endpoints->Item(i, &endpoint))) continue;
+            ComPtr<IAudioSessionManager2> manager;
+            if (FAILED(endpoint->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr,
+                reinterpret_cast<void**>(manager.GetAddressOf())))) continue;
+            ComPtr<IAudioSessionEnumerator> sessionsOnDevice;
+            if (FAILED(manager->GetSessionEnumerator(&sessionsOnDevice))) continue;
+            int total = 0; sessionsOnDevice->GetCount(&total);
+            for (int j = 0; j < total; ++j) {
+                ComPtr<IAudioSessionControl> control;
+                ComPtr<IAudioSessionControl2> control2;
+                if (FAILED(sessionsOnDevice->GetSession(j, &control)) || FAILED(control.As(&control2))) continue;
+                AudioSessionState state{}; DWORD pid = 0;
+                if (FAILED(control->GetState(&state)) || state == AudioSessionStateExpired ||
+                    FAILED(control2->GetProcessId(&pid)) || !pid || pid == GetCurrentProcessId()) continue;
+                auto image = a2r::processImage(pid);
+                if (image.empty()) continue;
+                for (int depth = 0; depth < 32; ++depth) {
+                    auto parent = parents.find(pid);
+                    if (parent == parents.end() || !parent->second || parent->second == pid) break;
+                    auto parentImage = a2r::processImage(parent->second);
+                    if (_wcsicmp(parentImage.c_str(), image.c_str()) != 0) break;
+                    pid = parent->second;
+                }
+                if (!routerAncestors.count(pid)) {
+                    applications[image].insert(pid);
+                    originalOutputs[{image, pid}].insert(deviceId(endpoint.Get()));
+                }
+            }
+        }
+        std::ostringstream out; out << '['; bool first = true;
+        for (const auto& [image, pids] : applications) for (const auto pid : pids) {
+            HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+            if (!process) continue;
+            const auto stamp = a2r::processStamp(process);
+            const bool sameImage = _wcsicmp(a2r::processImageFromHandle(process).c_str(), image.c_str()) == 0;
+            CloseHandle(process);
+            if (!stamp || !sameImage) continue;
+            if (!first) out << ','; first = false;
+            out << "{\"path\":" << quote(utf8(image)) << ",\"pid\":" << pid
+                << ",\"stamp\":" << quote(std::to_string(stamp)) << ",\"original_outputs\":[";
+            bool firstOutput = true;
+            for (const auto& output : originalOutputs[{image, pid}]) {
+                if (!firstOutput) out << ','; firstOutput = false; out << quote(utf8(output));
+            }
+            out << "]}";
+        }
+        out << ']'; result = out.str(); error.clear(); return result.c_str();
+    } catch (const std::exception& exc) { error = exc.what(); return nullptr; }
+}
+API int ar_live_matrix_version() { return 1; }
+API int ar_source_set_matrix(const wchar_t* source, int input, const wchar_t* destination, const wchar_t* matrix) {
+    std::lock_guard<std::mutex> lock(apiMutex);
+    if (!source || !destination || !matrix) { error = "Matrix source/output required"; return 0; }
+    const auto found = sessions.find(source);
+    if (found == sessions.end() || found->second.input != (input != 0)) { error = "Source session is unavailable"; return 0; }
+    std::wistringstream entries(matrix); entries.imbue(std::locale::classic());
+    size_t count = 0; if (!(entries >> count) || !count || count > 1024) { error = "Invalid matrix size"; return 0; }
+    std::vector<mux::ChannelConnection> mapping;
+    for (size_t i = 0; i < count; ++i) {
+        mux::ChannelConnection connection{};
+        if (!(entries >> connection.source >> connection.destination >> connection.gain)) { error = "Invalid matrix row"; return 0; }
+        mapping.push_back(connection);
+    }
+    std::wstring extra; if (entries >> extra) { error = "Extra matrix values"; return 0; }
+    return found->second.engine->setEndpointChannelMap(destination, mapping, error) ? 1 : 0;
 }

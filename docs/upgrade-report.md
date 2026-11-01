@@ -1,3 +1,7 @@
+Current extension: application copies and live per-route channel maps are described
+in [README](../README.md#application-routing-and-live-channels) and the latest
+[verification record](verification.md). The earlier report below is historical.
+
 # Clean UI, calibration and packaging report
 
 ## Implemented

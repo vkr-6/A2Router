@@ -43,7 +43,8 @@ excludes LFE. Stereo upmix copies fronts, derives centre at 0.5 L + 0.5 R, and u
 attenuated copies for surround pairs; LFE stays silent. This is stereo expansion,
 not recovered discrete surround. Conversion uses reported positions, never guessed
 indices. The native matrix clamps mixed samples; processed paths are not bit-perfect.
-Linux custom matrices remain unavailable.
+On PipeWire, unity-only remapping and duplication use native port links; DSP
+conversion presets are unavailable there.
 
 Calibration is Windows-only and requires the updated native DLL, a physical
 microphone and at least two physical outputs. Choose the microphone channel,
@@ -130,3 +131,25 @@ Windows' taskbar slider controls the selected Windows playback endpoint. Select
 the cable there yourself if that is the endpoint you intend to adjust; A2Router
 never changes the Windows default output implicitly. Windows per-application
 session gain and mute can also affect shared playback independently of route gain.
+
+### Routing software and editing channels while playing
+
+In Audio Routing choose Sources → Applications after starting the application's
+sound. Add a route for each additional destination. The source label says
+application copy because original playback stays active. Choose additional
+outputs to avoid hearing the original and a duplicate together. Saved rules use
+executable identity rather than a process-list position. Closed apps leave pending
+routes; refresh safely reconnects them when the app returns.
+
+Windows requires build 20348+ and the rebuilt native bridge. It captures a selected
+process tree as explicit stereo PCM; independent instances and protected content
+have limitations. Linux requires pw-dump/pw-link in a native PipeWire session and
+preserves original application links. Its native channel links provide unity gain,
+so conversion/DSP gain controls are disabled. Additional delay is unavailable on
+Linux application/channel links and is never silently ignored.
+
+Select a route and click Channels…; edit and Apply to selected route. Compatible Windows float paths and existing custom maps update live.
+The first edit is live when float formats/channel counts match. Other formats
+require a source restart to negotiate custom processing. Other mapped outputs keep running
+during subsequent edits. Device channel-count changes still need stopping the
+routes that use that device. PipeWire edits only the selected route's owned links.

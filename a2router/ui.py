@@ -250,6 +250,19 @@ class MainWindow(QMainWindow):
 
     def _routing_page(self):
         layout = self.page("Routing")
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel("Sources"))
+        self.source_scope = QComboBox()
+        self.source_scope.addItem("All sources", "all")
+        self.source_scope.addItem("Applications", "applications")
+        self.source_scope.addItem("Devices", "devices")
+        self.source_scope.currentIndexChanged.connect(self.filter_sources)
+        self.source_scope.setToolTip(
+            "Application copies retain original playback. Start audio in the app, then refresh to discover it."
+        )
+        filter_row.addWidget(self.source_scope)
+        filter_row.addStretch()
+        layout.addLayout(filter_row)
         row = QHBoxLayout()
         self.source, self.destination = QComboBox(), QComboBox()
         self.source.setMinimumContentsLength(20)
@@ -327,10 +340,18 @@ class MainWindow(QMainWindow):
             self.backend.capabilities().get("route_controls", False),
         )
         self.route_level_apply.setToolTip("A2Router stream gain; Windows DLL stream-controls API required")
+        self.edit_channels_button = self.button(level_row, "Channels…", self.edit_route_channels)
         level_row.addStretch()
         layout.addLayout(level_row)
         self.route_tree.itemSelectionChanged.connect(self._route_level_selected)
         self._route_level_selected()
+
+    def edit_route_channels(self):
+        if len(self.route_tree.selectedItems()) != 1:
+            self.error.setText("Select one route to configure its channels")
+            return
+        self.studio.routing_tabs.setCurrentWidget(self.studio.matrix)
+        self.studio.matrix.load_route()
 
     def _route_level_selected(self):
         selected = self.route_tree.selectedItems()
@@ -366,6 +387,7 @@ class MainWindow(QMainWindow):
             if (
                 not confirmed
                 and not source_device.get("monitor_of")
+                and not source_device.get("properties", {}).get("application_capture")
                 and destination_device.get("virtual") is not True
             ):
                 answer = QMessageBox.question(
@@ -420,6 +442,23 @@ class MainWindow(QMainWindow):
         else:
             self.error.setText("Select an available source and destination")
 
+    def filter_sources(self, index=None):
+        if not hasattr(self, "_source_rows"):
+            return
+        kind = self.source_scope.currentData()
+        rows = [
+            (ident, label)
+            for ident, label in self._source_rows
+            if kind == "all"
+            or bool(self.view_devices[ident].get("properties", {}).get("application_capture"))
+            == (kind == "applications")
+        ]
+        self._update_combo(self.source, rows)
+        if index is not None and self.source.currentIndex() < 0 and rows:
+            self.source.setCurrentIndex(0)  # Explicit user filter change, never refresh fallback.
+        self._reset_channel_editor()
+        self._matrix_changed()
+
     def _reset_channel_editor(self):
         pair = (self.source.currentData(), self.destination.currentData())
         signature = tuple(
@@ -468,6 +507,10 @@ class MainWindow(QMainWindow):
         gain.setDecimals(1)
         gain.setSingleStep(0.5)
         gain.setSuffix(" dB")
+        gain.setEnabled(self.backend.capabilities().get("channel_gain", True))
+        gain.setToolTip(
+            "Native PipeWire links use unity gain" if not gain.isEnabled() else "Channel connection gain"
+        )
         self.channel_table.setCellWidget(row, 2, gain)
         for column in range(3):
             widget = self.channel_table.cellWidget(row, column)
@@ -813,16 +856,25 @@ class MainWindow(QMainWindow):
     def _update_sync_controls(self):
         ident = self.sync_route.currentData()
         route = self.view_routes.get(ident)
-        capable = self.backend.capabilities().get("route_delay", False)
+        capabilities = self.backend.capabilities()
+        capable = capabilities.get("route_delay", False)
+        source = self.view_devices.get((route or {}).get("source_id"), {})
+        graph_delay_unavailable = bool(
+            route
+            and (route.get("channel_map") or source.get("properties", {}).get("application_capture"))
+            and not capabilities.get("graph_route_delay", True)
+        )
         mutating = self.busy and not self._background
-        editable = capable and route is not None and not mutating
+        editable = capable and route is not None and not mutating and not graph_delay_unavailable
         dirty = route is not None and ident in self._sync_edits
         self.sync_route.setEnabled(capable and not mutating)
         self.sync_delay.setEnabled(editable)
         self.sync_restart.setEnabled(editable)
         self.sync_apply.setEnabled(editable and dirty)
         self.sync_reset.setEnabled(editable and dirty)
-        if not capable:
+        if graph_delay_unavailable:
+            text = "Native application/channel links do not support extra delay; device-level loopback routes support a server latency target."
+        elif not capable:
             text = "Additional delay is unsupported by this backend; on Windows rebuild the native bridge."
         elif route is None:
             text = "Add a route, then select it here."
@@ -1020,6 +1072,15 @@ class MainWindow(QMainWindow):
         self.dashboard.populate(snapshot["devices"], snapshot["routes"])
         self.view_devices = {d["id"]: d for d in snapshot["devices"]}
         self.view_routes = {r["id"]: r for r in snapshot["routes"]}
+        application_support = self.backend.capabilities().get("applications", False) or any(
+            d.get("properties", {}).get("application_capture") for d in snapshot["devices"]
+        )
+        self.source_scope.model().item(1).setEnabled(application_support)
+        self.source_scope.setToolTip(
+            "Application copies preserve original playback; choose additional outputs. Start audio and refresh to discover apps."
+            if application_support
+            else "Application capture requires the new native DLL and Windows build 20348+, or a native PipeWire session with pw-dump/pw-link."
+        )
         device_rows, source_rows, destination_rows = [], [], []
         for device in snapshot["devices"]:
             label = device["name"] + (" (default)" if device["default"] else "")
@@ -1039,7 +1100,8 @@ class MainWindow(QMainWindow):
                 (device["id"], selector_label)
             )
         self._update_tree(self.device_tree, device_rows)
-        self._update_combo(self.source, source_rows)
+        self._source_rows = source_rows
+        self.filter_sources()
         self._update_combo(self.destination, destination_rows)
         self.inspect_device()
         self._reset_channel_editor()

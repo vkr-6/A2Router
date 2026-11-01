@@ -37,3 +37,10 @@ The top navigation and manual synchronization workflow are documented in [the us
 ## Current UI and packages
 
 Endpoint renaming is no longer exposed; Windows/vendor names are retained. Device/virtual configuration is combined. VB-CABLE routed gain uses the new native stream-control extension and actual WASAPI readback. Calibration uses finite native capture/playback and offline analysis; target Windows build/hardware checks remain required. The manual workflow now produces portable and optional single-file setup outputs; driver install/remove choices are unchecked. See [current guide](user-guide.md).
+
+Application capture uses Windows SDK process-loopback types (SDK 20348+; CI uses
+26100) and links Mmdevapi. Runtime support is checked with the real OS build.
+Public application/live-matrix extensions are version 1, additive to bridge ABI 2.
+Process creation times prevent a recycled PID being treated as the old source.
+No endpoint driver is required for process capture. CI compilation and real
+hardware validation of these new native paths remain required in this environment.

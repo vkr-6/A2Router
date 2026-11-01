@@ -128,3 +128,38 @@ Branding, volume scope, conversion levels and Linux latency (2026-11-01):
 - Linux tar.gz and .deb rebuilt. Extracted portable GUI/FFT smoke (explicit mock)
   passed with PYTHONPATH removed; current logo verified; both SHA256 checks passed.
   This local runtime uses Ubuntu 24.04/glibc 2.39. Windows rebuild requires CI.
+
+Application sources and live channel configuration (2026-11-01):
+
+- Added Windows application session discovery and public process-loopback
+  activation for Windows build 20348+, with process creation-time identity,
+  self/ancestor capture prevention and original-output duplication checks. These
+  are additive version-1 extensions to bridge ABI 2. The new Windows C++ code
+  has NOT been compiled or hardware tested in this environment: no Windows
+  compiler is installed, and no software was installed for this work.
+- Existing Windows Python ran 56 simulated backend/channel/device tests successfully.
+  Read-only OS/API inspection found build 26300 and the async activation export;
+  this does not verify the new DLL or real application capture. All test caches
+  and temporary test files were kept on the Linux filesystem.
+- Linux now discovers actual application streams through pw-dump and copies them
+  with owned pw-link connections, keeping original playback intact. The local
+  Pulse peer PID must belong to the same native PipeWire graph. Unity channel
+  remapping/duplication updates only the selected route's links. Non-unity gain
+  and additional delay on this graph transport are explicitly rejected.
+- Source filtering and per-route Channels actions use backend state. Compatible
+  Windows float paths/custom matrices support atomic immutable live-map changes;
+  older native bridges retain the explicit restart fallback. Channel-count or
+  incompatible source-format changes still require negotiation/restart.
+- Full Linux Python/Qt suite: 187 passed, 14 skipped. Ruff check and format passed.
+  Native GNU C++20 PCM/ring/concurrency/clock-correction tests passed.
+- Real private-server integration: 4 passed on PipeWire 1.0.5 and 4 passed on
+  PipeWire 0.3.48, covering actual PCM copies, original-output preservation,
+  unrelated-application exclusion, live channel swap, fan-out, profile/resource
+  reconciliation, process reconnect, GUI and cleanup. These tests use isolated
+  virtual sinks, not physical speakers or microphones.
+- Linux portable tar.gz and Debian package rebuilt with bundled Python/Qt; SHA256
+  checks passed. The rebuilt frozen GUI also passed real-backend application
+  discovery inside the isolated PipeWire 1.0.5 test. Local packages require
+  Ubuntu 24.04/glibc 2.39 or compatible.
+  No Windows executable was generated locally; use the manual Windows workflow
+  to compile and test the updated bridge before trying application capture.

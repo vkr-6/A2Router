@@ -18,6 +18,7 @@
 #define WIN32_LEAN_AND_MEAN
 
 #include "AudioEngine.h"
+#include "WindowsProcessCapture.h"
 #include "AudioRingBuffer.h"
 
 #include <windows.h>
@@ -34,6 +35,7 @@
 #include <deque>
 #include <future>
 #include <mutex>
+#include <sstream>
 #include <thread>
 
 // Ole32 supplies CoInitializeEx / CoCreateInstance / CoTaskMemFree /
@@ -41,6 +43,7 @@
 // `cl` command line does not, which is exactly the LNK2019 wall you hit.
 #pragma comment(lib, "Ole32.lib")
 #pragma comment(lib, "Avrt.lib")
+#pragma comment(lib, "Mmdevapi.lib")
 
 using Microsoft::WRL::ComPtr;
 
@@ -195,6 +198,10 @@ DeviceBufferSizing computeBufferSizing(int64_t delay_ms, double bytes_per_ms, si
 struct DeviceRuntime {
     int index = 0;
     std::unique_ptr<ChannelMatrix> channel_matrix;
+    std::atomic<const ChannelMatrix*> live_matrix{nullptr};
+    std::vector<std::unique_ptr<ChannelMatrix>> matrix_versions; // Control-thread ownership; retained until stop.
+    PcmEncoding matrix_encoding{};
+    uint32_t matrix_outputs = 0;
     std::vector<BYTE> matrix_input; // Allocated by the supervisor before audio starts.
     std::atomic<uint64_t> clipped_samples{0};
     std::wstring endpoint_id;
@@ -698,7 +705,8 @@ void AudioEngine::Impl::renderLoop(DeviceRuntime* dev) {
         }
 
         BYTE* nativeOut = out;
-        if (dev->channel_matrix) out = dev->matrix_input.data();
+        const auto* matrix = dev->live_matrix.load(std::memory_order_acquire);
+        if (matrix) out = dev->matrix_input.data();
         const size_t requested = static_cast<size_t>(framesAvailable) * align;
         const size_t currentFill = dev->ring->get_available_read();
 
@@ -759,8 +767,8 @@ void AudioEngine::Impl::renderLoop(DeviceRuntime* dev) {
 
         dev->fill.store(dev->ring->get_available_read(), std::memory_order_relaxed);
 
-        if (dev->channel_matrix)
-            dev->clipped_samples.fetch_add(dev->channel_matrix->process(out, reinterpret_cast<float*>(nativeOut), framesAvailable), std::memory_order_relaxed);
+        if (matrix)
+            dev->clipped_samples.fetch_add(matrix->process(out, reinterpret_cast<float*>(nativeOut), framesAvailable), std::memory_order_relaxed);
         hr = renderService->ReleaseBuffer(framesAvailable, 0);
         if (FAILED(hr)) {
             logger.event(LogLevel::Fatal, Event::RenderReleaseFailed, dev->index,
@@ -946,32 +954,54 @@ std::string AudioEngine::Impl::startLocked(const EngineConfig& cfg) {
 
     // Preserve default loopback for existing frontends; new controllers can
     // select a stable render-loopback or physical capture endpoint explicitly.
-    ComPtr<IMMDevice> captureDevice;
-    if (cfg.capture_endpoint_id.empty()) {
-        hr = enumerator->GetDefaultAudioEndpoint(cfg.capture_from_input ? eCapture : eRender,
-                                                eConsole, &captureDevice);
-    } else {
-        hr = enumerator->GetDevice(cfg.capture_endpoint_id.c_str(), &captureDevice);
-    }
-    if (FAILED(hr)) return "requested capture endpoint is unavailable";
-    ComPtr<IMMEndpoint> captureEndpoint;
-    EDataFlow captureFlow = eAll;
-    if (FAILED(captureDevice.As(&captureEndpoint)) || FAILED(captureEndpoint->GetDataFlow(&captureFlow)) ||
-        captureFlow != (cfg.capture_from_input ? eCapture : eRender))
-        return "capture endpoint has the wrong data flow";
-
-    LPWSTR rawCaptureId = nullptr;
-    if (FAILED(captureDevice->GetId(&rawCaptureId))) return "failed to read capture endpoint id";
-    CoTaskMemString captureId(rawCaptureId);
-
-    hr = captureDevice->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-                                 reinterpret_cast<void**>(captureClient.GetAddressOf()));
-    if (FAILED(hr)) return "failed to activate capture client";
-
+    CoTaskMemString captureId;
     WAVEFORMATEX* rawFormat = nullptr;
-    hr = captureClient->GetMixFormat(&rawFormat);
-    if (FAILED(hr)) return "failed to query mix format";
-    std::unique_ptr<WAVEFORMATEX, CoTaskMemDeleter> formatGuard(rawFormat);
+    WAVEFORMATEX processFormat{};
+    std::unique_ptr<WAVEFORMATEX, CoTaskMemDeleter> formatGuard;
+    if (cfg.capture_process_id) {
+        hr = a2r::activateProcessCapture(cfg.capture_process_id, cfg.capture_process_stamp,
+                                       captureClient.GetAddressOf());
+        if (FAILED(hr)) {
+            std::ostringstream failure;
+            failure << "Application capture activation failed (HRESULT 0x" << std::hex
+                    << static_cast<unsigned long>(hr)
+                    << "); requires Windows build 20348+ and an accessible process outside the router's own ancestry";
+            return failure.str();
+        }
+        processFormat.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
+        processFormat.nChannels = 2; processFormat.nSamplesPerSec = 48000;
+        processFormat.wBitsPerSample = 32; processFormat.nBlockAlign = 8;
+        processFormat.nAvgBytesPerSec = 48000 * 8;
+        rawFormat = &processFormat;
+    } else {
+        ComPtr<IMMDevice> captureDevice;
+        if (cfg.capture_endpoint_id.empty()) {
+            hr = enumerator->GetDefaultAudioEndpoint(cfg.capture_from_input ? eCapture : eRender,
+                                                    eConsole, &captureDevice);
+        } else {
+            hr = enumerator->GetDevice(cfg.capture_endpoint_id.c_str(), &captureDevice);
+        }
+        if (FAILED(hr)) return "requested capture endpoint is unavailable";
+        ComPtr<IMMEndpoint> captureEndpoint;
+        EDataFlow captureFlow = eAll;
+        if (FAILED(captureDevice.As(&captureEndpoint)) || FAILED(captureEndpoint->GetDataFlow(&captureFlow)) ||
+            captureFlow != (cfg.capture_from_input ? eCapture : eRender))
+            return "capture endpoint has the wrong data flow";
+
+        LPWSTR rawCaptureId = nullptr;
+        if (FAILED(captureDevice->GetId(&rawCaptureId))) return "failed to read capture endpoint id";
+        captureId.reset(rawCaptureId);
+
+        hr = captureDevice->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
+                                     reinterpret_cast<void**>(captureClient.GetAddressOf()));
+        if (FAILED(hr)) return "failed to activate capture client";
+
+        hr = captureClient->GetMixFormat(&rawFormat);
+        if (FAILED(hr)) return "failed to query mix format";
+
+
+        formatGuard.reset(rawFormat);
+    }
 
     const size_t formatBytes = sizeof(WAVEFORMATEX) + rawFormat->cbSize;
     mixFormatBlob.assign(reinterpret_cast<uint8_t*>(rawFormat),
@@ -983,8 +1013,9 @@ std::string AudioEngine::Impl::startLocked(const EngineConfig& cfg) {
     logger.event(LogLevel::Info, Event::MixFormatQueried, -1, sampleRate, blockAlign);
 
     const DWORD captureFlags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
-        (cfg.capture_from_input ? 0 : AUDCLNT_STREAMFLAGS_LOOPBACK);
-    hr = captureClient->Initialize(AUDCLNT_SHAREMODE_SHARED, captureFlags, 10000000, 0,
+        (cfg.capture_from_input ? 0 : AUDCLNT_STREAMFLAGS_LOOPBACK) |
+        (cfg.capture_process_id ? AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY : 0);
+    hr = captureClient->Initialize(AUDCLNT_SHAREMODE_SHARED, captureFlags, cfg.capture_process_id ? 0 : 10000000, 0,
                                    mixFormat(), nullptr);
     if (FAILED(hr)) return "failed to initialize loopback capture client";
     if (FAILED(captureClient->SetEventHandle(captureEvent.get())))
@@ -1023,7 +1054,7 @@ std::string AudioEngine::Impl::startLocked(const EngineConfig& cfg) {
         for (size_t i = 0; i < cfg.outputs.size(); ++i) {
             const std::wstring& wantId = cfg.outputs[i].endpoint_id;
 
-            if (!cfg.capture_from_input && wantId == captureId.get()) {
+            if (!cfg.capture_process_id && !cfg.capture_from_input && wantId == captureId.get()) {
                 logger.message(LogLevel::Warn, static_cast<int>(i),
                                "output %zu is the loopback source itself; skipped", i);
                 continue;
@@ -1081,16 +1112,18 @@ std::string AudioEngine::Impl::startLocked(const EngineConfig& cfg) {
                     if (ext->SubFormat != pcmSubtype && ext->SubFormat != floatSubtype)
                         return "Channel routing requires PCM or float source audio";
                     sourceTag = static_cast<WORD>(ext->SubFormat.Data1);
-                    validBits = ext->Samples.wValidBitsPerSample;
+                    validBits = ext->Samples.wValidBitsPerSample ? ext->Samples.wValidBitsPerSample : rawFormat->wBitsPerSample;
                 }
                 if (sourceTag != WAVE_FORMAT_PCM && sourceTag != WAVE_FORMAT_IEEE_FLOAT)
                     return "Channel routing requires PCM or float source audio";
                 if (rawFormat->nBlockAlign != rawFormat->nChannels * (rawFormat->wBitsPerSample / 8))
                     return "Unsupported packed source format";
                 try {
+                    dev->matrix_encoding = PcmEncoding{rawFormat->nChannels, rawFormat->wBitsPerSample, validBits, sourceTag == WAVE_FORMAT_IEEE_FLOAT};
+                    dev->matrix_outputs = destination->nChannels;
                     dev->channel_matrix = std::make_unique<ChannelMatrix>(
-                        PcmEncoding{rawFormat->nChannels, rawFormat->wBitsPerSample, validBits, sourceTag == WAVE_FORMAT_IEEE_FLOAT},
-                        destination->nChannels, cfg.outputs[i].channel_map);
+                        dev->matrix_encoding, dev->matrix_outputs, cfg.outputs[i].channel_map);
+                    dev->live_matrix.store(dev->channel_matrix.get(), std::memory_order_release);
                 } catch (const std::exception& e) { return e.what(); }
                 mappedFormat.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
                 mappedFormat.Format.nChannels = destination->nChannels;
@@ -1173,7 +1206,18 @@ std::string AudioEngine::Impl::startLocked(const EngineConfig& cfg) {
                 (std::abs(cfg.outputs[i].initial_volume - 1.0f) > 0.0001f && !dev->streamVolume))
                 return "Output cannot provide the requested verified stream gain/mute";
             try {
-                if (dev->channel_matrix) {
+                // Float paths with unchanged channel counts can opt into live
+                // routing without renegotiating WASAPI or processing identity audio.
+                const GUID floatId = {WAVE_FORMAT_IEEE_FLOAT, 0, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
+                const bool floatSource = rawFormat->wFormatTag == WAVE_FORMAT_IEEE_FLOAT ||
+                    (rawFormat->wFormatTag == WAVE_FORMAT_EXTENSIBLE && rawFormat->cbSize >= 22 &&
+                     reinterpret_cast<WAVEFORMATEXTENSIBLE*>(rawFormat)->SubFormat == floatId);
+                if (!dev->channel_matrix && floatSource && rawFormat->wBitsPerSample == 32 &&
+                    rawFormat->nChannels <= 64 && blockAlign == rawFormat->nChannels * 4) {
+                    dev->matrix_encoding = PcmEncoding{rawFormat->nChannels, 32, 32, true};
+                    dev->matrix_outputs = rawFormat->nChannels;
+                }
+                if (dev->matrix_outputs) {
                     UINT32 frames = 0;
                     if (FAILED(dev->client->GetBufferSize(&frames)) || !frames)
                         return "Cannot allocate channel matrix input buffer";
@@ -1496,6 +1540,32 @@ EngineState AudioEngine::state() const {
 }
 
 bool AudioEngine::isRunning() const { return state() == EngineState::Running; }
+
+bool AudioEngine::setEndpointChannelMap(const std::wstring& endpoint, const std::vector<ChannelConnection>& mapping,
+                                      std::string& error) {
+    std::lock_guard<std::mutex> lock(impl_->devicesMutex);
+    auto found = std::find_if(impl_->devices.begin(), impl_->devices.end(),
+        [&](const auto& device) { return device->endpoint_id == endpoint; });
+    if (found == impl_->devices.end()) { error = "Output is unavailable"; return false; }
+    auto& device = **found;
+    if (impl_->state.load(std::memory_order_acquire) != EngineState::Running ||
+        !device.running.load(std::memory_order_acquire) || device.faulted.load(std::memory_order_acquire)) {
+        error = "Output is not running"; return false;
+    }
+    if (!device.matrix_outputs || device.matrix_input.empty()) {
+        error = "This source format requires a restart to enable custom channel routing"; return false;
+    }
+    if (device.matrix_versions.size() >= 128) {
+        error = "Live edit history is full; stop/start this source before more matrix edits"; return false;
+    }
+    try {
+        auto replacement = std::make_unique<ChannelMatrix>(device.matrix_encoding, device.matrix_outputs, mapping);
+        auto* pointer = replacement.get();
+        device.matrix_versions.push_back(std::move(replacement));
+        device.live_matrix.store(pointer, std::memory_order_release);
+        error.clear(); return true;
+    } catch (const std::exception& exc) { error = exc.what(); return false; }
+}
 
 bool AudioEngine::setDeviceVolume(int deviceIndex, float linearVolume) {
     linearVolume = std::clamp(linearVolume, 0.0f, 1.0f);

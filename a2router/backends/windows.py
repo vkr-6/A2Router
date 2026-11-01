@@ -6,7 +6,7 @@ import os
 import sys
 import threading
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from a2router.backends import windows_vbcable
 from a2router.backends.base import AudioBackend
@@ -34,6 +34,7 @@ class WindowsBackend(AudioBackend):
         self.active_matrices = {}
         self.format_cache = {}
         self.cable_control_mode = "routes"
+        self.application_error = ""
         self._calibration_cancel = threading.Event()
         self.has_matrix_api = bridge is not None and hasattr(bridge, "ar_source_start_matrix")
         self.has_live_delay_api = bridge is not None and hasattr(bridge, "ar_source_set_delay")
@@ -80,6 +81,14 @@ class WindowsBackend(AudioBackend):
                     ]
                     self.bridge.ar_source_start_matrix.restype = ctypes.c_int
                 signatures = {
+                    "ar_applications": ([], ctypes.c_char_p),
+                    "ar_application_api_version": ([], ctypes.c_int),
+                    "ar_application_capture_supported": ([], ctypes.c_int),
+                    "ar_live_matrix_version": ([], ctypes.c_int),
+                    "ar_source_set_matrix": (
+                        [ctypes.c_wchar_p, ctypes.c_int, ctypes.c_wchar_p, ctypes.c_wchar_p],
+                        ctypes.c_int,
+                    ),
                     "ar_controls": ([], ctypes.c_char_p),
                     "ar_set_device_volume": ([ctypes.c_wchar_p, ctypes.c_float], ctypes.c_int),
                     "ar_set_device_mute": ([ctypes.c_wchar_p, ctypes.c_int], ctypes.c_int),
@@ -148,7 +157,26 @@ class WindowsBackend(AudioBackend):
             "device_rename": self.bridge is not None and hasattr(self.bridge, "ar_rename_device"),
             "adjustable_latency": False,
             "synchronization": "Existing per-output WASAPI drift controllers; acoustic alignment unverified",
-            "sources": "Active microphone/input endpoints and loopbacks of every active output",
+            "applications": bool(
+                self.bridge
+                and all(
+                    hasattr(self.bridge, n)
+                    for n in (
+                        "ar_applications",
+                        "ar_application_api_version",
+                        "ar_application_capture_supported",
+                    )
+                )
+                and self.bridge.ar_application_api_version() == 1
+                and self.bridge.ar_application_capture_supported()
+            ),
+            "live_channel_routing": bool(
+                self.bridge
+                and hasattr(self.bridge, "ar_source_set_matrix")
+                and hasattr(self.bridge, "ar_live_matrix_version")
+                and self.bridge.ar_live_matrix_version() == 1
+            ),
+            "sources": "Endpoints, output loopbacks and application copies on Windows build 20348+",
             "mixing": "Independent shared-mode source sessions mixed by Windows; PCM conversion may occur",
             "route_changes": "Changing destinations restarts only the affected source's outputs",
             "virtual_driver": "VB-CABLE by VB-Audio; installed on demand from Virtual devices",
@@ -163,6 +191,18 @@ class WindowsBackend(AudioBackend):
             raise BackendError(self._error())
         self.telemetry = json.loads(data)
 
+    def _validate_route(self, route, allow_missing=False):
+        super()._validate_route(route, allow_missing)
+        source = self.devices.get(route.source_id)
+        if (
+            source
+            and source.properties.get("application_capture")
+            and route.destination_id in source.properties.get("original_outputs", [])
+        ):
+            raise BackendError(
+                "This application already plays on that output; choose an additional destination"
+            )
+
     def _validate_layout(self, source, dest):
         if source.positions in (("mono",), ("front-center",)) and dest.positions == (
             "front-left",
@@ -173,9 +213,62 @@ class WindowsBackend(AudioBackend):
             return
         super()._validate_layout(source, dest)
 
+    def _application_devices(self):
+        applications = {}
+        payload = self.bridge.ar_applications()
+        if payload is None:
+            raise BackendError(self._error())
+        for app in json.loads(payload):
+            path = app["path"]
+            outputs = app.get("original_outputs", [])
+            if not isinstance(outputs, list) or any(not isinstance(output, str) for output in outputs):
+                raise BackendError("Invalid application playback endpoint list")
+            pid, stamp = app["pid"], app["stamp"]
+            if (
+                not isinstance(path, str)
+                or not path
+                or len(path) > 2000
+                or type(pid) is not int
+                or not 0 < pid <= 0xFFFFFFFF
+                or not str(stamp).isdecimal()
+                or int(stamp) <= 0
+            ):
+                raise BackendError("Invalid native application identity")
+            ident = "application:" + path.lower()
+            previous = self.devices.get(ident)
+            preferred = previous.properties.get("pid") if previous else None
+            current = applications.get(ident)
+            if current and (
+                current.properties["pid"] == preferred
+                or (pid != preferred and current.properties["pid"] < pid)
+            ):
+                continue
+            applications[ident] = Device(
+                ident,
+                f"{PureWindowsPath(path).name} · PID {pid} · application copy",
+                "input",
+                True,
+                channels=2,
+                positions=("front-left", "front-right"),
+                sample_rate=48000,
+                sample_format="float32le",
+                state="AVAILABLE",
+                properties={
+                    "application_capture": True,
+                    "application_path": path,
+                    "pid": pid,
+                    "original_outputs": outputs,
+                    "native_endpoint_id": f"process:{pid}:{stamp}",
+                    "processing": "Explicit stereo 48 kHz float PCM process-tree request; OS mixing/conversion may occur; original playback remains active",
+                },
+            )
+        return applications
+
     def _native_source(self, source_id):
         source = self.devices.get(source_id)
         if source:
+            if source.properties.get("application_capture"):
+                return source.properties["native_endpoint_id"], False
             if source.properties.get("capture_endpoint_id"):
                 return source.properties["capture_endpoint_id"], True
             endpoint = self.devices.get(source.monitor_of) if source.monitor_of else source
@@ -246,6 +339,12 @@ class WindowsBackend(AudioBackend):
                         monitor_of=ident,
                         properties=dict(devices[ident].properties),
                     )
+            self.application_error = ""
+            if self.capabilities().get("applications"):
+                try:
+                    devices.update(self._application_devices())
+                except (BackendError, ValueError, KeyError, TypeError) as exc:
+                    self.application_error = str(exc)
             cable_outputs = {}
             for device in devices.values():
                 if device.kind == "output" and device.properties.get("virtual_driver") == "VB-CABLE":
@@ -342,6 +441,12 @@ class WindowsBackend(AudioBackend):
             delays = tuple(r.delay_ms for r in ordered)
             matrices = tuple(json.dumps(r.channel_map, sort_keys=True) for r in ordered)
             native_id, capture_input = self._native_source(source_id)
+            previous_source = self.source_endpoints.get(source_id)
+            if previous_source and previous_source != (native_id, capture_input):
+                if not self.bridge.ar_source_start(previous_source[0], int(previous_source[1]), ""):
+                    failures[source_id] = self._error()
+                    continue
+                self.active_sessions.pop(source_id, None)
             self.source_endpoints[source_id] = (native_id, capture_input)
             if (
                 target != self.active_sessions.get(source_id)
@@ -474,6 +579,64 @@ class WindowsBackend(AudioBackend):
             return json.loads(payload)
         except (ValueError, TypeError) as exc:
             raise BackendError("Invalid native recording payload") from exc
+
+    def can_live_channel_map(self, route_id):
+        if not self.capabilities().get("live_channel_routing"):
+            return False
+        route = self.routes.get(route_id)
+        if route is None:
+            return False
+        source, dest = self.devices.get(route.source_id), self.devices.get(route.destination_id)
+        return bool(
+            route.channel_map
+            or (
+                source
+                and dest
+                and source.sample_format == "float32le"
+                and source.channels == dest.channels
+                and source.positions == dest.positions
+            )
+        )
+
+    def set_route_channel_map(self, route_id, mapping):
+        from copy import deepcopy
+        from dataclasses import replace
+
+        route = self.get_route_status(route_id)
+        candidate = replace(route, channel_map=deepcopy(mapping))
+        self._validate_route(candidate)
+        live = route.enabled and self.transport_running and route.status == "connected"
+        if not live or not self.can_live_channel_map(route_id):
+            return super().set_route_channel_map(route_id, mapping)
+        source = self.get_device(route.source_id)
+        destination = self.get_device(route.destination_id)
+        effective = candidate.channel_map or [
+            {"source": 0 if source.channels == 1 else i, "destination": i, "gain": 1}
+            for i in range(destination.channels)
+        ]
+        values = [str(len(effective))]
+        for connection in effective:
+            values.extend(str(connection[key]) for key in ("source", "destination", "gain"))
+        native_id, capture = self._native_source(route.source_id)
+        target = destination.properties.get("native_endpoint_id", destination.id)
+        if not self.bridge.ar_source_set_matrix(native_id, int(capture), target, " ".join(values)):
+            raise BackendError(self._error())
+        route.channel_map = candidate.channel_map
+        ordered = sorted(
+            (
+                r
+                for r in self.routes.values()
+                if r.enabled
+                and r.status == "connected"
+                and r.source_id == route.source_id
+                and r.destination_id in self.devices
+            ),
+            key=lambda r: r.destination_id,
+        )
+        self.active_matrices[route.source_id] = tuple(
+            json.dumps(r.channel_map, sort_keys=True) for r in ordered
+        )
+        return "Channel matrix updated live; source and other outputs were not restarted"
 
     def _wait_stream_gain(self, source_id, destination_id, expected):
         # Telemetry is published periodically by the native supervisor. The
@@ -851,6 +1014,8 @@ class WindowsBackend(AudioBackend):
         return {
             **super().diagnostics(),
             "telemetry": self.telemetry,
+            "application_discovery_error": self.application_error,
+            "application_capture_requirement": "Windows build 20348+; copies preserve original app output",
             "native_library": str(library_path()),
             "processing": "Uncompressed shared-mode PCM; Windows mixing, rate conversion, and mono-to-stereo duplication may occur. Bit-perfect transport unverified.",
             "virtual_driver": {

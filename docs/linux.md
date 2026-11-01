@@ -39,6 +39,22 @@ guarantee an exact acoustic delay. Earlier PipeWire and native PulseAudio server
 keep this control unavailable.
 
 Endpoint gain uses Pulse's native 16.16 volume units and verifies the server's
-readback. Mute is also read back. Linux custom channel matrices, per-route gain,
+readback. Mute is also read back. Linux unity matrices are available via native graph links. Per-link/route gain DSP,
 acoustic calibration and hardware-format editing are not implemented. Unsupported
 controls remain gated; Windows functionality is not used as evidence of Linux parity.
+
+### Application copies and live unity channel links
+
+Install PipeWire's pw-dump/pw-link tools through the distribution's pipewire-bin
+package if absent. Application sources are discovered from real playback nodes,
+with layouts derived from their audio ports. Original playback is preserved.
+Links carry a2router.owner and route UUID properties, are verified after creation,
+and are freshly resolved before deletion. No unrelated links are adopted or
+removed. Existing rules can be reconciled after app/server restarts.
+
+Unity matrices can remap, duplicate or sum reported channels without restarting
+other routes. Per-link gain and acoustic delay are unavailable on this transport;
+non-unity gain or nonzero delay requests fail explicitly. Device-level loopback
+routes still support a PipeWire 1.0+ latency target. Native graph copies can be
+silent when the application is idle; graph connectivity alone is not proof of
+physical playback. Integration tests use actual PCM at silent virtual sinks.

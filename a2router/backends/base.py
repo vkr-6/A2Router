@@ -89,7 +89,12 @@ class AudioBackend:
             and source.properties["feedback_group"] == dest.properties.get("feedback_group")
         ):
             raise BackendError("Feedback: a sink monitor cannot feed its own sink")
-        if not source.monitor_of and dest.virtual is not True and not route.monitoring_confirmed:
+        if (
+            not source.monitor_of
+            and not source.properties.get("application_capture")
+            and dest.virtual is not True
+            and not route.monitoring_confirmed
+        ):
             raise BackendError("Microphone/input monitoring requires explicit feedback-risk confirmation")
         if route.channel_map:
             if not source.channels or not dest.channels:
@@ -178,6 +183,9 @@ class AudioBackend:
                 if (route.source_id not in self.devices or route.destination_id not in self.devices)
                 else "error"
             )
+
+    def can_live_channel_map(self, route_id):
+        return self.capabilities().get("live_channel_routing", False)
 
     def set_route_channel_map(self, route_id, mapping):
         from dataclasses import replace

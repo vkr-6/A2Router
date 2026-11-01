@@ -63,6 +63,8 @@ struct EngineConfig {
     // endpoints let independent engines capture inputs or non-default outputs.
     std::wstring capture_endpoint_id;
     bool capture_from_input = false;
+    uint32_t capture_process_id = 0;
+    uint64_t capture_process_stamp = 0;
 
     double   cushion_ms          = 50.0;   // baseline FIFO depth before playback starts
     double   control_range_ms    = 50.0;   // normalisation range for the drift controller
@@ -183,6 +185,13 @@ public:
     // device didn't support volume control at startup; the device keeps
     // playing normally either way. linearVolume is clamped to [0, 1].
     bool setDeviceVolume(int deviceIndex, float linearVolume);
+
+    // Replace an existing custom matrix without restarting capture or render.
+    // Stable endpoint identity avoids retargeting an index after device removal.
+    // Float paths with matching channel counts support the first live edit;
+    // other formats require a restart to negotiate custom processing.
+    bool setEndpointChannelMap(const std::wstring& endpoint,
+                               const std::vector<ChannelConnection>& mapping, std::string& error);
 
     // Live per-device delay change, no restart. deviceIndex follows the same
     // convention as setDeviceVolume (position in stats().devices).

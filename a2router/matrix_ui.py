@@ -53,6 +53,12 @@ class MatrixEditor(QWidget):
                 "Upmix stereo → surround",
             ]
         )
+        if not window.backend.capabilities().get("channel_gain", True):
+            self.preset.clear()
+            self.preset.addItems(["Identity", "Stereo swap"])
+            self.preset.setToolTip(
+                "Native port links: unity remapping and duplication; per-link gain/DSP is unavailable"
+            )
         row.addWidget(self.preset)
         self.conversion_level = QComboBox()
         self.conversion_level.addItem("Preserve front level", "preserve")
@@ -72,6 +78,11 @@ class MatrixEditor(QWidget):
         row.addWidget(self.gain)
         set_gain = QPushButton("Set selected gains")
         set_gain.clicked.connect(self.apply_gain)
+        set_gain.setEnabled(window.backend.capabilities().get("channel_gain", True))
+        set_gain.setToolTip(
+            "Per-link gain requires a processing backend; native PipeWire links use unity gain"
+        )
+        self.gain.setEnabled(window.backend.capabilities().get("channel_gain", True))
         row.addWidget(set_gain)
         remove = QPushButton("Disconnect selected")
         remove.clicked.connect(self.disconnect_selected)
@@ -99,7 +110,9 @@ class MatrixEditor(QWidget):
         self.state.setWordWrap(True)
         layout.addWidget(self.state)
         self.setEnabled(window.backend.capabilities().get("channel_routing", False))
-        self.setToolTip("Requires the native channel-matrix API; unsupported on the current Linux backend.")
+        self.setToolTip(
+            "Uses native processing on Windows or unity port links on PipeWire; changing a device's channel count still requires stopping its routes."
+        )
         window.source.currentIndexChanged.connect(self.refresh)
         window.destination.currentIndexChanged.connect(self.refresh)
         window.channel_group.toggled.connect(self.refresh)
@@ -123,6 +136,7 @@ class MatrixEditor(QWidget):
 
     def refresh(self, *_):
         w = self.window
+        self.setEnabled(w.backend.capabilities().get("channel_routing", False))
         for selector, original in (
             (self.source_selector, w.source),
             (self.destination_selector, w.destination),
@@ -266,6 +280,7 @@ class MatrixEditor(QWidget):
         if not route:
             return
         w = self.window
+        w.source_scope.setCurrentIndex(w.source_scope.findData("all"))
         w.source.setCurrentIndex(w.source.findData(route["source_id"]))
         w.destination.setCurrentIndex(w.destination.findData(route["destination_id"]))
         if (
@@ -316,7 +331,11 @@ class MatrixEditor(QWidget):
             QMessageBox.question(
                 w,
                 "Apply channel mapping?",
-                "This can restart the selected source and its outputs. Unmapped channels are silent. Apply?",
+                (
+                    "Update this route live without restarting its source? Unmapped channels are silent."
+                    if w.backend.can_live_channel_map(route["id"])
+                    else "This can restart the selected source and its outputs. Unmapped channels are silent. Apply?"
+                ),
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
