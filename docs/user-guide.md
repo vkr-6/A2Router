@@ -12,7 +12,7 @@ can wait behind an active control operation.
 
 Mixer uses narrow observed peak meters, not history graphs. Physical endpoint levels
 affect other applications. VB-CABLE is grouped once; its default control scope is
-Windows playback endpoint. Route trim is a separate, explicitly selected gain stage.
+Windows-linked managed playback. Route trim is a separate gain stage.
 The cable input meter is before routed gain, so it can still move while routed
 playback is muted. Adjust differing route gains using Selected route level in Routing.
 
@@ -52,16 +52,22 @@ microphone fixed at the listening position, hardware volume safe and other apps
 quiet. A confirmation precedes sequential first-channel chirps. Native recording and
 playback are separate from GUI rendering; Python analyzes only completed recordings.
 
-Windows microphone/input capture is off on every application start. Enable
-Settings → Privacy → Allow microphone/input capture for this session before
-microphone routing, microphone format scanning or calibration. The choice is not
-saved in profiles. Turning it off cancels calibration and stops managed physical
-input capture while retaining route definitions and other audio routes. Discovery
-reads configured input format properties without opening an input audio client;
-input peak metering is unavailable to avoid activating idle microphones. Rebuild
-the native DLL to obtain this discovery change. Active virtual-cable recording
-routes can still appear as recording activity in Windows; they are separate from
-physical microphone capture. Windows microphone permissions must also allow access.
+Devices → Inputs contains **Recording access**. Both switches start off:
+**Allow recording inputs for this session** permits virtual cable recording, while
+**Enable physical microphones for this session** separately permits microphones.
+Microphone routing, physical-input format scanning and calibration require both.
+Turning physical microphones off cancels calibration and stops microphone routes;
+virtual cable playback can continue. Turning all recording off stops all capture,
+including cable recording. Neither permission is saved in profiles. Input rows show
+recording access separately from endpoint availability.
+
+Windows labels virtual-cable recording as microphone use too. Its recording
+indicator can remain on during a cable route without physical microphone capture.
+No app can truthfully hide this activity while continuing to record the cable.
+Native discovery uses read-only input properties and does not activate input audio
+clients, volume, topology or peak interfaces. Input endpoint sliders/meters are
+unavailable instead of waking microphones. Rebuild the native DLL for these changes.
+Windows microphone permissions must also allow the requested input.
 
 Measurement stops managed routes temporarily and restores their previous enabled
 states after completion, cancellation or failure. Cancel stops the current test.
@@ -150,18 +156,22 @@ wired/USB microphone, especially when measuring Bluetooth playback.
 
 ### Cable control scope
 
-Mixer → Cable volume selects routed playback gain or the Windows playback endpoint.
-The latter follows external Windows volume/mute changes and can be used without an
-A2Router route. Both stages can affect the final level; scope selection changes
-which control is edited, not the other stage's stored value. VB-CABLE panel… opens
-the hash-verified official control panel. Enable Windows Volume Control in its
-menu if Windows' slider has no effect. This vendor option is not changed by the
-app and has not been tested on Windows hardware in this revision.
+Mixer → Cable volume defaults to **Windows-linked managed playback**. Its slider
+writes the real Windows cable playback endpoint; Windows changes are read back and
+applied to all A2Router cable routes using native stream gain. Per-route trims and
+mute remain independent. No routes restart for gain changes. Synchronization
+polling continues while the Mixer page is hidden. Unsupported or unverified stream
+updates report an error; an unverified linked update attempts to stop its source.
 
-Windows' taskbar slider controls the selected Windows playback endpoint. Select
-the cable there yourself if that is the endpoint you intend to adjust; A2Router
-never changes the Windows default output implicitly. Windows per-application
-session gain and mute can also affect shared playback independently of route gain.
+The vendor **Windows Volume Control** option must stay **OFF** in linked mode;
+otherwise both the driver and A2Router apply master gain. If it is ON, select
+**Windows volume (driver-managed)**, which removes the additional master factor.
+**Route trim** offers the previous independent app-only controls. Preferences retain
+the selected mode. The driver option is never changed automatically. Linked gain
+only affects A2Router-managed streams; other recording applications require vendor
+volume support. Control the same cable playback endpoint in Windows Sound. Default
+endpoint status and the reported cable device description select the main pin;
+endpoint names are never used as route identities.
 
 ### Routing software and editing channels while playing
 

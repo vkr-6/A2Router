@@ -169,24 +169,35 @@ retain their own terms. See [third-party notices](THIRD_PARTY_NOTICES.md).
 
 ## Cable volume controls
 
-In Mixer, Cable volume selects either A2Router routed playback or the Windows
-playback endpoint (the default). These are separate gain stages; changing scope does not reset
-or multiply either value automatically. Endpoint mode reads back Windows values
-and reflects changes made outside A2Router.
+Mixer → Cable volume defaults to **Windows-linked managed playback**. The app
+writes the actual cable playback endpoint's Windows volume/mute and reads external
+changes back. Native A2Router cable streams follow that endpoint, including across
+multiple destinations, while independent per-route trims are preserved. Updates
+continue on other pages and while the window is hidden; no source restart is needed.
+The Windows flyout must control that same cable playback endpoint, not a physical
+speaker or the cable recording endpoint.
 
-If the Windows sound slider does not affect VB-CABLE audio, open **VB-CABLE
-panel…** and enable **Windows Volume Control** in its menu. The vendor documents
-that the playback volume control has no effect while this option is disabled:
-[VB-CABLE reference manual, Windows Volume Control](https://vb-audio.com/Cable/VBCABLE_ReferenceManual.pdf).
-A2Router verifies the original control-panel binary before launching it and never
-runs the installer from this action. Driver options are not changed automatically.
+Keep the vendor **Windows Volume Control** option **OFF** in linked mode to avoid
+applying gain twice. If that vendor option is enabled, select **Windows volume
+(driver-managed)** instead: A2Router then leaves audible master gain to the driver.
+**Route trim** retains the independent app-only controls. Mode selection is saved as
+an application preference. A2Router never changes the vendor option automatically.
+Controlling other applications recording the cable requires the vendor feature;
+linked mode only processes A2Router-managed playback. See the
+[VB-CABLE manual](https://vb-audio.com/Cable/VBCABLE_ReferenceManual.pdf).
 
-Windows physical microphone capture is **off by default on each start**. Enable
-**Settings → Privacy → Allow microphone/input capture for this session** when
-needed. Turning it off cancels calibration and stops physical-input routes without
-discarding their definitions. Updated native discovery reads input format properties
-without opening capture clients or input peak meters. Rebuild the Windows DLL to
-get this change; active virtual-cable capture can still show recording activity.
+**Devices → Inputs → Recording access** contains two session-only switches, both
+**off on every start**. Allow recording inputs for VB-CABLE or input routing.
+Physical microphones remain blocked until **Enable physical microphones** is also
+checked. Turning physical microphones off stops those sessions and calibration while
+cable routing can continue. Turning all recording off also stops virtual-cable
+capture. Profiles retain desired routes but never restore either permission.
+
+Windows can show its microphone indicator during **virtual-cable recording** even
+with every physical microphone disabled. The app cannot hide that indicator while
+capturing the cable. Updated native discovery never activates input audio, volume,
+meter or topology interfaces, and the native recording gate defaults closed.
+Rebuild the Windows DLL/package to obtain this extension.
 
 New packages embed app version, source commit/dirty state, UTC build time, workflow
 run, exact dependency versions and the native DLL SHA-256. **Help → About** displays

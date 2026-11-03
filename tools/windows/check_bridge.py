@@ -37,6 +37,7 @@ def main():
         "ar_application_api_version",
         "ar_live_matrix_version",
         "ar_privacy_version",
+        "ar_capture_access_version",
     ):
         function = getattr(bridge, name)
         function.argtypes, function.restype = [], ctypes.c_int
@@ -51,6 +52,7 @@ def main():
         "ar_calibration_record",
         "ar_calibration_reset",
         "ar_calibration_cancel",
+        "ar_set_capture_access",
     ):
         if not hasattr(bridge, name):
             raise SystemExit(f"Native bridge is missing {name}")

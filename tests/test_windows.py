@@ -63,6 +63,7 @@ def test_fanout_input_capture_and_server_mixing_simulated():
     backend = WindowsBackend(bridge)
     backend.refresh()
     backend.set_microphone_access(True)
+    backend.set_physical_microphone_access(True)
     assert backend.get_device("mic").kind == "input"
     assert backend.get_device("wasapi-loopback:headphones").monitor_of == "headphones"
     assert not backend.capabilities()["virtual_devices"]
@@ -99,6 +100,7 @@ def test_hotplug_and_recovery():
     backend = WindowsBackend(bridge)
     backend.refresh()
     backend.set_microphone_access(True)
+    backend.set_physical_microphone_access(True)
     route = backend.create_route("mic", "headphones", monitoring_confirmed=True)
     bridge.missing.add("headphones")
     backend.refresh()
@@ -115,6 +117,7 @@ def test_partial_source_failure_keeps_other_sources_running():
     backend = WindowsBackend(bridge)
     backend.refresh()
     backend.set_microphone_access(True)
+    backend.set_physical_microphone_access(True)
     good = backend.create_route("wasapi-loopback:default", "headphones")
     bridge.fail_source = "mic"
     bad = backend.create_route("mic", "headphones", monitoring_confirmed=True)
@@ -136,6 +139,7 @@ def test_windows_mono_duplication_policy():
     backend = WindowsBackend(Bridge())
     backend.refresh()
     backend.set_microphone_access(True)
+    backend.set_physical_microphone_access(True)
     backend.devices["mic"].channels = 1
     backend.devices["mic"].positions = ("mono",)
     assert backend.create_route("mic", "headphones", monitoring_confirmed=True).status == "connected"
@@ -228,6 +232,7 @@ class CableBridge(Bridge):
 def test_vbcable_capture_and_feedback_share_one_cable():
     bridge = CableBridge()
     backend = WindowsBackend(bridge)
+    backend.set_microphone_access(True)
     backend.refresh()
     route = backend.create_route("cable-out", "headphones")
     assert route.status == "connected"
@@ -286,6 +291,7 @@ def test_calibration_cannot_open_capture_without_session_permission():
         backend.record_calibration("mic", "headphones", -36, 0)
     assert bridge.recordings == 0 and not bridge.starts
     backend.set_microphone_access(True)
+    backend.set_physical_microphone_access(True)
     assert not bridge.starts  # Permission alone does not create a capture session.
     backend.reset_calibration()
     assert backend.record_calibration("mic", "headphones", -36, 0) == {}
@@ -293,3 +299,33 @@ def test_calibration_cannot_open_capture_without_session_permission():
     with pytest.raises(BackendError, match="access is off"):
         backend.record_calibration("mic", "headphones", -36, 0)
     assert bridge.recordings == 1
+
+
+def test_recording_access_blocks_virtual_cable_as_well_as_physical_inputs():
+    class GuardedCable(CableBridge):
+        def __init__(self):
+            super().__init__()
+            self.permissions = []
+
+        def ar_set_capture_access(self, enabled):
+            self.permissions.append(bool(enabled))
+            if not enabled:
+                self.sessions = {
+                    key: value for key, value in self.sessions.items() if not value["capture_from_input"]
+                }
+            return 1
+
+    bridge = GuardedCable()
+    backend = WindowsBackend(bridge)
+    backend.refresh()
+    cable = backend.create_route("cable-out", "headphones")
+    desktop = backend.create_route("wasapi-loopback:default", "hdmi")
+    assert not backend.microphone_access and cable.status != "connected"
+    assert "cable-out" not in bridge.sessions and desktop.status == "connected"
+    assert backend.get_device("cable-out").properties["recording_access"] is False
+    backend.set_microphone_access(True)
+    assert cable.status == "connected" and "cable-out" in bridge.sessions
+    backend.set_microphone_access(False)
+    backend.refresh()
+    assert "cable-out" not in bridge.sessions and cable.enabled and cable.status == "pending"
+    assert desktop.status == "connected" and bridge.permissions == [False, True, False]

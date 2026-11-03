@@ -23,6 +23,7 @@
 #include <wrl/client.h>
 #include "AudioEngine.h"
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cwchar>
 #include <map>
@@ -40,6 +41,7 @@ struct Session { std::unique_ptr<mux::AudioEngine> engine; bool input = false; }
 std::map<std::wstring, Session> sessions;
 std::string result, error;
 std::mutex apiMutex; // Serializes only the control ABI, never realtime callbacks.
+std::atomic<bool> captureAccess{false}; // Never persisted; all recording starts explicitly denied.
 std::string utf8(const std::wstring& s) {
     if (s.empty()) return {};
     int n = WideCharToMultiByte(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0, nullptr, nullptr);
@@ -63,6 +65,18 @@ struct ComScope {
     ~ComScope() { if (SUCCEEDED(hr)) CoUninitialize(); }
     bool usable() const { return SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE; }
 };
+bool endpointAccess(IMMDevice* device) {
+    if (!device) return false;
+    ComPtr<IMMEndpoint> endpoint;
+    EDataFlow flow = eAll;
+    if (FAILED(device->QueryInterface(IID_PPV_ARGS(&endpoint))) || FAILED(endpoint->GetDataFlow(&flow))) {
+        error = "Cannot determine endpoint direction"; return false;
+    }
+    if (flow == eCapture && !captureAccess.load()) {
+        error = "Recording access is off in Devices > Inputs"; return false;
+    }
+    return true;
+}
 std::wstring deviceId(IMMDevice* device) {
     LPWSTR raw = nullptr;
     if (FAILED(device->GetId(&raw))) return {};
@@ -131,7 +145,8 @@ std::wstring interfaceName(IMMDevice* device) {
 void writeDevice(std::ostream& out, IMMDevice* device, const std::wstring& name, bool input, bool isDefault) {
     out << "{\"id\":" << quote(utf8(deviceId(device))) << ",\"name\":" << quote(utf8(name))
         << ",\"kind\":" << quote(input ? "input" : "output") << ",\"default\":" << (isDefault ? "true" : "false");
-    auto cable = vbCableInstance(device);
+    // Capture discovery never activates even topology/volume interfaces.
+    auto cable = input ? cableServiceInstance(device) : vbCableInstance(device);
     const auto adapterName = interfaceName(device);
     // Exact immutable adapter branding is a fallback, never an endpoint-name guess.
     const bool branded = _wcsicmp(adapterName.c_str(), L"VB-Audio Virtual Cable") == 0 ||
@@ -140,6 +155,16 @@ void writeDevice(std::ostream& out, IMMDevice* device, const std::wstring& name,
     if (!cable.empty()) out << ",\"virtual\":true";
     out << ",\"properties\":{\"interface_name\":" << quote(utf8(adapterName));
     if (!cable.empty()) out << ",\"virtual_driver\":\"VB-CABLE\",\"feedback_group\":" << quote("vbcable:base");
+    {
+        ComPtr<IPropertyStore> properties;
+        PROPVARIANT description; PropVariantInit(&description);
+        if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, &properties)) &&
+            SUCCEEDED(properties->GetValue(PKEY_Device_DeviceDesc, &description)) &&
+            description.vt == VT_LPWSTR && description.pwszVal)
+            out << ",\"device_description\":" << quote(utf8(description.pwszVal));
+        PropVariantClear(&description);
+    }
+
     out << ",\"controls\":"; a2r::controls(out, device);
     ComPtr<IPropertyStore> deviceProperties;
     PROPVARIANT configured; PropVariantInit(&configured);
@@ -201,6 +226,9 @@ void writeDevice(std::ostream& out, IMMDevice* device, const std::wstring& name,
     out << '}';
 }
 bool startSession(const std::wstring& source, bool input, const wchar_t* ids, const wchar_t* delayList = nullptr, const wchar_t* matrixList = nullptr, const wchar_t* volumeList = nullptr) {
+    if (input && ids && *ids && !captureAccess.load()) {
+        error = "Recording access is off in Devices > Inputs"; return false;
+    }
     auto& session = sessions[source];
     if (!session.engine) session.engine = std::make_unique<mux::AudioEngine>();
     session.engine->stop();
@@ -410,6 +438,8 @@ API const char* ar_stats() {
     } catch (const std::exception& exc) { error = exc.what(); return nullptr; }
 }
 API void ar_close() {
+    captureAccess.store(false);
+    a2r::calibrationCancelled.store(true, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(apiMutex);
     sessions.clear();
 }
@@ -451,6 +481,7 @@ API int ar_set_device_volume(const wchar_t* id, float level) {
     ComScope scope;
     ComPtr<IMMDevice> device;
     if (scope.usable()) device = a2r::endpoint(id);
+    if (device && !endpointAccess(device.Get())) return 0;
     ComPtr<IAudioEndpointVolume> volume;
     if (!device || !std::isfinite(level) || level < 0 || level > 1 ||
         FAILED(device->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(volume.GetAddressOf()))) ||
@@ -462,6 +493,7 @@ API int ar_set_device_mute(const wchar_t* id, int muted) {
     ComScope scope;
     ComPtr<IMMDevice> device;
     if (scope.usable()) device = a2r::endpoint(id);
+    if (device && !endpointAccess(device.Get())) return 0;
     ComPtr<IAudioEndpointVolume> volume;
     if (!device || FAILED(device->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr,
         reinterpret_cast<void**>(volume.GetAddressOf()))) || FAILED(volume->SetMute(muted != 0, nullptr))) {
@@ -474,6 +506,7 @@ API const char* ar_device_formats(const wchar_t* id) {
     ComScope scope;
     ComPtr<IMMDevice> device;
     if (scope.usable()) device = a2r::endpoint(id);
+    if (device && !endpointAccess(device.Get())) return nullptr;
     ComPtr<IAudioClient> client;
     if (!device || FAILED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
         reinterpret_cast<void**>(client.GetAddressOf())))) { error = "Cannot query device formats"; return nullptr; }
@@ -498,6 +531,7 @@ API int ar_set_device_format(const wchar_t* id, int channels, int rate, int bits
     ComScope scope;
     ComPtr<IMMDevice> device;
     if (scope.usable()) device = a2r::endpoint(id);
+    if (device && !endpointAccess(device.Get())) return 0;
     ComPtr<IAudioClient> client;
     if (!device || FAILED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
         reinterpret_cast<void**>(client.GetAddressOf())))) { error = "Endpoint unavailable"; return 0; }
@@ -577,6 +611,19 @@ API int ar_rename_device(const wchar_t* id, const wchar_t* name) {
 
 // Additive, versioned controls retain the existing API-v2 ABI.
 API int ar_privacy_version() { return 1; }
+API int ar_capture_access_version() { return 1; }
+API int ar_set_capture_access(int enabled) {
+    captureAccess.store(enabled != 0);
+    if (!enabled) a2r::calibrationCancelled.store(true, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lock(apiMutex);
+    if (!enabled) {
+        for (auto it = sessions.begin(); it != sessions.end();) {
+            if (it->second.input) it = sessions.erase(it);
+            else ++it;
+        }
+    }
+    error.clear(); return 1;
+}
 API int ar_routing_controls_version() { return 1; }
 API int ar_source_start_config(const wchar_t* source, int input, const wchar_t* ids,
                               const wchar_t* delays, const wchar_t* matrices, const wchar_t* volumes) {
@@ -611,6 +658,7 @@ API void ar_calibration_cancel() { a2r::calibrationCancelled.store(true, std::me
 API void ar_calibration_reset() { a2r::calibrationCancelled.store(false, std::memory_order_relaxed); }
 API const char* ar_calibration_record(const wchar_t* mic, const wchar_t* output, float level, int channel) {
     std::lock_guard<std::mutex> lock(apiMutex);
+    if (!captureAccess.load()) { error = "Recording access is off in Devices > Inputs"; return nullptr; }
     try {
         ComScope scope;
         if (!scope.usable() || channel < 0) { error = "COM initialization or microphone channel invalid"; return nullptr; }

@@ -30,7 +30,14 @@ class ConfigurationBridge(CableBridge):
             if row["id"].startswith("cable-"):
                 # Reproduce the reported bug: a genuine endpoint is enumerated
                 # but not tagged virtual until adapter branding is considered.
-                row["properties"] = {"interface_name": "VB-Audio Virtual Cable"}
+                row["properties"] = {
+                    "interface_name": "VB-Audio Virtual Cable",
+                    "device_description": "CABLE Input"
+                    if row["id"] == "cable-in"
+                    else "CABLE In 16 Ch"
+                    if row["id"] == "cable-16"
+                    else "CABLE Output",
+                }
                 config = self.configs.get(row["id"], FORMATS[0])
                 row.update(
                     channels=config["channels"],
@@ -98,6 +105,7 @@ def test_adapter_branding_classifies_existing_endpoints_without_installing(monke
     original = bridge.ar_devices
     bridge.ar_devices = lambda: original().replace(b"VB-Audio Virtual Cable", adapter_name.encode())
     backend = WindowsBackend(bridge)
+    backend.set_microphone_access(True)  # Explicit capture permission for this functional test.
     backend.refresh()
     assert len(backend._cable_outputs()) == 2
     assert backend.get_device("cable-out").properties["capture_endpoint_id"] == "cable-out"
@@ -110,6 +118,7 @@ def test_adapter_branding_classifies_existing_endpoints_without_installing(monke
 def test_device_controls_are_verified_observations_and_do_not_restart_routes():
     bridge = StreamBridge()
     backend = WindowsBackend(bridge)
+    backend.set_microphone_access(True)  # Explicit capture permission for this functional test.
     backend.refresh()
     backend.create_route("cable-out", "headphones")
     starts = len(bridge.starts)
@@ -127,6 +136,7 @@ def test_device_controls_are_verified_observations_and_do_not_restart_routes():
 def test_format_scan_apply_16_channels_and_true_system_name():
     bridge = ConfigurationBridge()
     backend = WindowsBackend(bridge)
+    backend.set_microphone_access(True)  # Explicit capture permission for this functional test.
     backend.refresh()
     with pytest.raises(BackendError, match="Scan formats"):
         backend.configure_device_format("cable-out", FORMATS[-1])
@@ -144,6 +154,7 @@ def test_format_scan_apply_16_channels_and_true_system_name():
 def test_active_routes_block_format_changes_and_rejections_preserve_state():
     bridge = ConfigurationBridge()
     backend = WindowsBackend(bridge)
+    backend.set_microphone_access(True)  # Explicit capture permission for this functional test.
     backend.refresh()
     backend.inspect_formats("cable-out")
     route = backend.create_route("cable-out", "headphones")
@@ -161,6 +172,7 @@ def test_telemetry_failure_does_not_hide_working_endpoints():
     bridge = ConfigurationBridge()
     bridge.ar_stats = lambda: None
     backend = WindowsBackend(bridge)
+    backend.set_microphone_access(True)  # Explicit capture permission for this functional test.
     backend.refresh()
     assert len(backend._cable_outputs()) == 2
     assert backend.get_device("cable-out").channels == 2
@@ -169,6 +181,7 @@ def test_telemetry_failure_does_not_hide_working_endpoints():
 
 def test_shared_cable_route_blocks_alternative_pin_reconfiguration():
     backend = WindowsBackend(ConfigurationBridge())
+    backend.set_microphone_access(True)  # Explicit capture permission for this functional test.
     backend.refresh()
     backend.inspect_formats("cable-16")
     backend.create_route("cable-out", "headphones")
@@ -181,6 +194,7 @@ def test_gui_stop_allows_format_change_without_restarting_desired_route():
 
     bridge = ConfigurationBridge()
     backend = WindowsBackend(bridge)
+    backend.set_microphone_access(True)  # Explicit capture permission for this functional test.
     backend.refresh()
     route = backend.create_route("cable-out", "headphones")
     controller = Controller(backend)
@@ -223,11 +237,101 @@ class StreamBridge(ConfigurationBridge):
         return 0
 
 
+def test_windows_linked_cable_gain_tracks_system_and_app_without_restarting():
+    bridge = StreamBridge()
+    backend = WindowsBackend(bridge)
+    backend.set_microphone_access(True)
+    backend.refresh()
+    assert backend.cable_control_mode == "linked"
+    first = backend.create_route("cable-out", "headphones")
+    second = backend.create_route("cable-out", "hdmi")
+    backend.set_route_volume(second.id, 0.5)
+    starts = len(bridge.starts)
+
+    def gains():
+        return {d["id"]: d["volume"] for d in bridge.sessions["cable-out"]["devices"]}
+
+    assert gains() == {"headphones": 0.8, "hdmi": 0.4}
+    endpoint_calls = []
+    setter = bridge.ar_set_device_volume
+    bridge.ar_set_device_volume = lambda ident, level: (endpoint_calls.append(ident), setter(ident, level))[1]
+    backend.set_device_volume("cable-out", 0.4)
+    assert endpoint_calls == ["cable-in"]  # Write real playback endpoint, never recording endpoint.
+    assert bridge.volume == 0.4 and gains() == {"headphones": 0.4, "hdmi": 0.2}
+    bridge.volume = 0.6  # Windows flyout changed while the app did not issue a write.
+    backend.poll_controls()
+    assert gains() == {"headphones": 0.6, "hdmi": 0.3}
+    assert all(
+        backend.get_device(i).properties["controls"]["volume"] == 0.6
+        for i in ("cable-in", "cable-out", "cable-16")
+    )
+    bridge.muted = True
+    backend.poll_controls()
+    assert gains() == {"headphones": 0, "hdmi": 0}
+    backend.set_device_mute("cable-16", False)
+    assert gains() == {"headphones": 0.6, "hdmi": 0.3} and not bridge.muted
+    assert len(bridge.starts) == starts and (first.volume, second.volume) == (1, 0.5)
+    assert not first.muted and not second.muted
+
+
+def test_driver_managed_mode_removes_linked_gain_without_double_scaling():
+    bridge = StreamBridge()
+    backend = WindowsBackend(bridge)
+    backend.set_microphone_access(True)
+    backend.refresh()
+    route = backend.create_route("cable-out", "headphones")
+    backend.set_route_volume(route.id, 0.5)
+    assert bridge.sessions["cable-out"]["devices"][0]["volume"] == 0.4
+    starts = len(bridge.starts)
+    backend.set_cable_control_mode("endpoint")
+    assert bridge.sessions["cable-out"]["devices"][0]["volume"] == 0.5
+    bridge.volume = 0.2
+    backend.poll_controls()
+    assert bridge.sessions["cable-out"]["devices"][0]["volume"] == 0.5
+    backend.set_cable_control_mode("linked")
+    assert bridge.sessions["cable-out"]["devices"][0]["volume"] == pytest.approx(0.1)
+    assert len(bridge.starts) == starts and route.volume == 0.5
+
+
+def test_physical_microphone_can_stay_off_while_cable_recording_runs():
+    bridge = StreamBridge()
+    backend = WindowsBackend(bridge)
+    backend.refresh()
+    mic = backend.create_route("mic", "headphones", monitoring_confirmed=True)
+    cable = backend.create_route("cable-out", "hdmi")
+    assert not bridge.sessions
+    backend.set_microphone_access(True)
+    assert cable.status == "connected" and mic.status == "pending"
+    assert "mic" not in bridge.sessions and not backend.physical_microphone_access
+    backend.set_physical_microphone_access(True)
+    assert mic.status == "connected" and "mic" in bridge.sessions
+    backend.set_physical_microphone_access(False)
+    assert "mic" not in bridge.sessions and cable.status == "connected"
+    assert backend.get_device("mic").properties["recording_access"] is False
+    backend.set_microphone_access(False)
+    assert not bridge.sessions and not backend.physical_microphone_access
+
+
+def test_unverified_linked_gain_stops_playback_and_retains_route_trim():
+    bridge = StreamBridge()
+    backend = WindowsBackend(bridge)
+    backend.set_microphone_access(True)
+    backend.refresh()
+    route = backend.create_route("cable-out", "headphones")
+    bridge.reject_gain = ("headphones", 0.2)
+    bridge.volume = 0.2
+    with pytest.raises(BackendError, match="playback stopped"):
+        backend.poll_controls()
+    assert not bridge.sessions and route.status == "error"
+    assert route.volume == 1 and route.enabled
+
+
 def test_cable_stream_gain_is_live_shared_across_pins_and_restored_on_restart():
     from a2router.controller import Controller
 
     bridge = StreamBridge()
     backend = WindowsBackend(bridge)
+    backend.set_microphone_access(True)  # Explicit capture permission for this functional test.
     backend.refresh()
     backend.set_cable_control_mode("routes")
     route = backend.create_route("cable-out", "headphones")
@@ -250,6 +354,7 @@ def test_cable_stream_gain_is_live_shared_across_pins_and_restored_on_restart():
 def test_failed_cable_gain_rolls_back_successful_outputs():
     bridge = StreamBridge()
     backend = WindowsBackend(bridge)
+    backend.set_microphone_access(True)  # Explicit capture permission for this functional test.
     backend.refresh()
     backend.set_cable_control_mode("routes")
     first = backend.create_route("cable-out", "headphones")
@@ -279,7 +384,9 @@ def test_stream_gain_stats_failure_rolls_back_native_and_desired_state():
 
     bridge = InterruptedStats()
     backend = WindowsBackend(bridge)
+    backend.set_microphone_access(True)  # Explicit capture permission for this functional test.
     backend.refresh()
+    backend.set_cable_control_mode("routes")
     route = backend.create_route("cable-out", "headphones")
     with pytest.raises(BackendError, match="previous stream gain restored"):
         backend.set_route_volume(route.id, 0.2)
@@ -305,7 +412,9 @@ def test_stream_gain_waits_for_supervisor_snapshot_without_restarting(mode):
 
     bridge = DelayedStats()
     backend = WindowsBackend(bridge)
+    backend.set_microphone_access(True)  # Explicit capture permission for this functional test.
     backend.refresh()
+    backend.set_cable_control_mode("routes")
     route = backend.create_route("cable-out", "headphones")
     starts = len(bridge.starts)
     if mode == "edit":
@@ -325,6 +434,7 @@ def test_saved_format_with_unchanged_active_mix_reports_pending_state():
             return 1  # Configuration saved; active audio engine still uses stereo.
 
     backend = WindowsBackend(PendingFormat())
+    backend.set_microphone_access(True)  # Explicit capture permission for this functional test.
     backend.refresh()
     backend.inspect_formats("cable-out")
     message = backend.configure_device_format("cable-out", FORMATS[-1])
@@ -335,8 +445,10 @@ def test_saved_format_with_unchanged_active_mix_reports_pending_state():
 def test_cable_endpoint_scope_reads_windows_changes_without_altering_route_gain():
     bridge = StreamBridge()
     backend = WindowsBackend(bridge)
+    backend.set_microphone_access(True)  # Explicit capture permission for this functional test.
     backend.refresh()
-    assert backend.cable_control_mode == "endpoint"
+    assert backend.cable_control_mode == "linked"
+    backend.set_cable_control_mode("endpoint")
     route = backend.create_route("cable-out", "headphones")
     backend.set_route_volume(route.id, 0.6)
     backend.set_device_volume("cable-out", 0.35)

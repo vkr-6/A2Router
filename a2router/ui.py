@@ -7,7 +7,17 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QProcess, QProcessEnvironment, QSignalBlocker, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QEvent,
+    QObject,
+    QProcess,
+    QProcessEnvironment,
+    QSettings,
+    QSignalBlocker,
+    Qt,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -85,6 +95,16 @@ class MainWindow(QMainWindow):
         self.error = QLabel()
         self.error.setWordWrap(True)
         self.statusBar().addWidget(self.error, 1)
+        if hasattr(self.backend, "set_cable_control_mode"):
+            self.cable_preferences = QSettings(
+                QSettings.defaultFormat(), QSettings.UserScope, "A2Router", "Studio"
+            )
+            mode = self.cable_preferences.value("cableVolumeMode", self.backend.cable_control_mode)
+            if mode in ("endpoint", "routes", "linked") and (
+                mode != "linked" or self.backend.capabilities().get("route_controls")
+            ):
+                # Set the policy before startup refresh can restore any sessions.
+                self.backend.cable_control_mode = mode
         self._dashboard_page()
         self._devices_page()
         self._routing_page()
@@ -188,7 +208,8 @@ class MainWindow(QMainWindow):
             controls = QHBoxLayout()
             controls.addWidget(QLabel("Cable volume"))
             self.cable_volume_scope = QComboBox()
-            self.cable_volume_scope.addItem("Windows playback endpoint", "endpoint")
+            self.cable_volume_scope.addItem("Windows-linked managed playback", "linked")
+            self.cable_volume_scope.addItem("Windows volume (driver-managed)", "endpoint")
             self.cable_volume_scope.addItem("Route trim (independent of Windows)", "routes")
             self.cable_volume_scope.setCurrentIndex(
                 self.cable_volume_scope.findData(self.backend.cable_control_mode)
@@ -199,8 +220,10 @@ class MainWindow(QMainWindow):
             controls.addStretch()
             layout.addLayout(controls)
             self.cable_volume_hint = QLabel(
-                "Windows cable audio requires “Windows Volume Control” in the VB-CABLE panel. "
-                "Windows Sound must be controlling the same CABLE Input playback endpoint."
+                "Linked mode follows the CABLE Input Windows volume/mute in A2Router routes. "
+                "Keep the vendor Windows Volume Control option OFF in linked mode to avoid double gain. "
+                "If that option is ON, choose driver-managed mode instead. "
+                "Route trim remains independent. Other recording applications require vendor support."
             )
             self.cable_volume_hint.setObjectName("MutedText")
             self.cable_volume_hint.setWordWrap(True)
@@ -224,7 +247,13 @@ class MainWindow(QMainWindow):
 
     def change_cable_scope(self):
         mode = self.cable_volume_scope.currentData()
-        self.submit(lambda: self.backend.set_cable_control_mode(mode), persist=False, refresh_backend=False)
+
+        def apply():
+            message = self.backend.set_cable_control_mode(mode)
+            self.cable_preferences.setValue("cableVolumeMode", mode)
+            return message
+
+        self.submit(apply, persist=False, refresh_backend=False)
 
     def change_device_volume(self, device_id, volume):
         self.submit(lambda: self.backend.set_device_volume(device_id, volume), refresh_backend=False)
@@ -233,7 +262,17 @@ class MainWindow(QMainWindow):
         self.submit(lambda: self.backend.set_device_mute(device_id, muted), refresh_backend=False)
 
     def poll_meters(self):
-        if not self.busy and self.tabs.currentIndex() in (0, 1) and self.backend.capabilities().get("meters"):
+        if (
+            not self.busy
+            and (
+                self.tabs.currentIndex() in (0, 1)
+                or (
+                    getattr(self.backend, "cable_control_mode", "") == "linked"
+                    and bool(self.backend.active_sessions)
+                )
+            )
+            and self.backend.capabilities().get("meters")
+        ):
             self.submit(self.backend.poll_controls, persist=False, background=True, refresh_backend=False)
 
     def _devices_page(self):
@@ -936,11 +975,26 @@ class MainWindow(QMainWindow):
         request = self._microphone_request = getattr(self, "_microphone_request", 0) + 1
         if not enabled:
             self.backend.microphone_access = False  # Revoke before calibration can restore managed routes.
+            self.backend.physical_microphone_access = False
+            self._physical_microphone_request = getattr(self, "_physical_microphone_request", 0) + 1
             self.backend.cancel_calibration()  # Lock-free cancellation even while a worker records.
 
         def apply():
             if request == self._microphone_request:
                 return self.backend.set_microphone_access(enabled)
+            return None
+
+        self.submit(apply, persist=False)
+
+    def change_physical_microphone_access(self, enabled):
+        request = self._physical_microphone_request = getattr(self, "_physical_microphone_request", 0) + 1
+        if not enabled:
+            self.backend.physical_microphone_access = False
+            self.backend.cancel_calibration()
+
+        def apply():
+            if request == self._physical_microphone_request:
+                return self.backend.set_physical_microphone_access(enabled)
             return None
 
         self.submit(apply, persist=False)
@@ -1233,7 +1287,11 @@ class MainWindow(QMainWindow):
                 if present
                 else "VB-CABLE is not detected; add it in Devices → Configure if needed"
             )
-            self.cable_volume_hint.setVisible(present and self.backend.cable_control_mode == "endpoint")
+            with QSignalBlocker(self.cable_volume_scope):
+                self.cable_volume_scope.setCurrentIndex(
+                    self.cable_volume_scope.findData(self.backend.cable_control_mode)
+                )
+            self.cable_volume_hint.setVisible(present and self.backend.cable_control_mode != "routes")
             self.vbcable_status.setText(
                 "VB-CABLE connected"
                 if present

@@ -33,8 +33,9 @@ class WindowsBackend(AudioBackend):
         self.active_delays = {}
         self.active_matrices = {}
         self.format_cache = {}
-        self.cable_control_mode = "endpoint"
+        self.cable_control_mode = "linked"
         self.microphone_access = False  # Explicit, session-only permission; never restored from profiles.
+        self.physical_microphone_access = False
         self.application_error = ""
         self._calibration_cancel = threading.Event()
         self.has_matrix_api = bridge is not None and hasattr(bridge, "ar_source_start_matrix")
@@ -87,6 +88,8 @@ class WindowsBackend(AudioBackend):
                     "ar_application_capture_supported": ([], ctypes.c_int),
                     "ar_live_matrix_version": ([], ctypes.c_int),
                     "ar_privacy_version": ([], ctypes.c_int),
+                    "ar_capture_access_version": ([], ctypes.c_int),
+                    "ar_set_capture_access": ([ctypes.c_int], ctypes.c_int),
                     "ar_source_set_matrix": (
                         [ctypes.c_wchar_p, ctypes.c_int, ctypes.c_wchar_p, ctypes.c_wchar_p],
                         ctypes.c_int,
@@ -124,6 +127,15 @@ class WindowsBackend(AudioBackend):
                 self.bridge = None
                 self.last_error = f"Build/install a2router_wasapi.dll API v2 first: {exc}"
 
+        if (
+            self.bridge
+            and hasattr(self.bridge, "ar_set_capture_access")
+            and not self.bridge.ar_set_capture_access(0)
+        ):
+            self.last_error = "Native recording block could not be confirmed"
+        if not self.capabilities().get("route_controls"):
+            self.cable_control_mode = "endpoint"  # Legacy DLLs cannot implement linked managed gain.
+
     def capabilities(self):
         return {
             "routing": self.bridge is not None,
@@ -155,6 +167,7 @@ class WindowsBackend(AudioBackend):
             and self.bridge.ar_calibration_version() == 1,
             "device_controls": self.bridge is not None and hasattr(self.bridge, "ar_set_device_volume"),
             "meters": self.bridge is not None and hasattr(self.bridge, "ar_controls"),
+            "recording_access_guard": bool(self.bridge and hasattr(self.bridge, "ar_set_capture_access")),
             "passive_input_discovery": bool(
                 self.bridge
                 and hasattr(self.bridge, "ar_privacy_version")
@@ -366,6 +379,11 @@ class WindowsBackend(AudioBackend):
                     device.monitor_of = cable_outputs[group][0]
                     device.properties["capture_endpoint_id"] = device.id
             self.devices, self.last_error = devices, ""
+            for device in devices.values():
+                if self._recording_input(device.id):
+                    device.properties["recording_access"] = self.microphone_access and (
+                        not self._physical_input(device.id) or self.physical_microphone_access
+                    )
             self._update_cable_controls()
             enumerated = True
             stats_ok = True
@@ -417,17 +435,37 @@ class WindowsBackend(AudioBackend):
                 route.status, route.error = "error", str(exc)
 
     def _apply(self):
+        for device in self.devices.values():
+            if self._recording_input(device.id):
+                device.properties["recording_access"] = self.microphone_access and (
+                    not self._physical_input(device.id) or self.physical_microphone_access
+                )
         groups = {}
         for route in self.routes.values():
             route.resource_ids = []
             if not route.enabled or not self.transport_running:
                 route.status, route.error = ("disabled" if not route.enabled else "stopped"), ""
                 continue
-            if self._physical_input(route.source_id) and not self.microphone_access:
-                route.status, route.error = "pending", "Microphone/input access is off; enable it in Settings"
+            if self._recording_input(route.source_id) and not self.microphone_access:
+                route.status, route.error = (
+                    "pending",
+                    "Recording access is off; enable it in Devices → Inputs (includes virtual cables)",
+                )
+                continue
+            if self._physical_input(route.source_id) and not self.physical_microphone_access:
+                route.status, route.error = "pending", "Physical microphones are off in Devices → Inputs"
                 continue
             try:
                 self._validate_route(route)
+                source = self.devices.get(route.source_id)
+                if (
+                    self.cable_control_mode == "linked"
+                    and source
+                    and source.properties.get("virtual_driver") == "VB-CABLE"
+                ):
+                    if not self.capabilities().get("route_controls"):
+                        raise BackendError("Rebuild the native DLL or select Route trim for cable volume")
+                    self._effective_route_gain(route)
                 groups.setdefault(route.source_id, []).append(route)
             except BackendError as exc:
                 route.status = (
@@ -481,7 +519,7 @@ class WindowsBackend(AudioBackend):
                         "\n".join(target),
                         "\n".join(map(str, delays)),
                         "\n".join(rows),
-                        "\n".join(str(0 if r.muted else r.volume) for r in ordered),
+                        "\n".join(str(self._effective_route_gain(r)) for r in ordered),
                     )
                 elif self.has_matrix_api and any(r.channel_map for r in ordered):
                     rows = []
@@ -513,7 +551,7 @@ class WindowsBackend(AudioBackend):
                 self._read_stats()
             if source_id not in failures and self.capabilities().get("route_controls"):
                 for route, destination in zip(ordered, target):
-                    desired = 0 if route.muted else route.volume
+                    desired = self._effective_route_gain(route)
                     observed = next(
                         (
                             d.get("volume")
@@ -585,7 +623,11 @@ class WindowsBackend(AudioBackend):
 
     def record_calibration(self, microphone_id, output_id, level, channel):
         if not self.microphone_access:
-            raise BackendError("Microphone/input access is off; enable it in Settings before calibration")
+            raise BackendError("Recording access is off; enable it in Devices → Inputs before calibration")
+        if not self.physical_microphone_access:
+            raise BackendError(
+                "Physical microphones are off; enable them in Devices → Inputs before calibration"
+            )
         if not self.capabilities().get("calibration"):
             raise BackendError("Native calibration is unavailable")
         payload = self.bridge.ar_calibration_record(microphone_id, output_id, level, channel)
@@ -595,6 +637,19 @@ class WindowsBackend(AudioBackend):
             return json.loads(payload)
         except (ValueError, TypeError) as exc:
             raise BackendError("Invalid native recording payload") from exc
+
+    def _recording_input(self, device_id):
+        device = self.devices.get(device_id)
+        if device is None:
+            return bool(self.source_endpoints.get(device_id, (None, False))[1])
+        return bool(
+            device.properties.get("capture_endpoint_id")
+            or (
+                device.kind == "input"
+                and not device.monitor_of
+                and not device.properties.get("application_capture")
+            )
+        )
 
     def _physical_input(self, device_id):
         device = self.devices.get(device_id)
@@ -612,13 +667,35 @@ class WindowsBackend(AudioBackend):
         if type(enabled) is not bool:
             raise BackendError("Microphone access must be a boolean")
         if not enabled:
+            self.physical_microphone_access = False
             self.cancel_calibration()
         self.microphone_access = enabled
+        if (
+            self.bridge
+            and hasattr(self.bridge, "ar_set_capture_access")
+            and not self.bridge.ar_set_capture_access(int(enabled))
+        ):
+            self.microphone_access = False
+            raise BackendError("Native recording access could not be confirmed: " + self._error())
+        if self.bridge:
+            self._apply()
+        if not enabled and any(self._recording_input(source) for source in self.active_sessions):
+            raise BackendError("Recording could not be stopped; try Emergency Mute or exit A2Router")
+        return "Recording access " + ("allowed for this session" if enabled else "off")
+
+    def set_physical_microphone_access(self, enabled):
+        if type(enabled) is not bool:
+            raise BackendError("Microphone access must be a boolean")
+        if enabled and not self.microphone_access:
+            raise BackendError("Allow recording access in Devices → Inputs first")
+        self.physical_microphone_access = enabled
+        if not enabled:
+            self.cancel_calibration()
         if self.bridge:
             self._apply()
         if not enabled and any(self._physical_input(source) for source in self.active_sessions):
-            raise BackendError("Microphone capture could not be stopped; try Emergency Mute or exit A2Router")
-        return "Microphone/input access " + ("allowed for this session" if enabled else "off")
+            raise BackendError("Microphone capture could not be stopped; exit A2Router")
+        return "Physical microphones " + ("enabled for this session" if enabled else "off")
 
     def can_live_channel_map(self, route_id):
         if not self.capabilities().get("live_channel_routing"):
@@ -711,11 +788,12 @@ class WindowsBackend(AudioBackend):
             dest = self.get_device(route.destination_id).properties.get(
                 "native_endpoint_id", route.destination_id
             )
-            old = 0 if route.muted else route.volume
-            if not self.bridge.ar_source_set_volume(source, int(capture), dest, 0 if mute else gain):
+            old = self._effective_route_gain(route)
+            desired = self._effective_route_gain(route, gain, mute)
+            if not self.bridge.ar_source_set_volume(source, int(capture), dest, desired):
                 raise BackendError(self._error())
             try:
-                if not self._wait_stream_gain(route.source_id, dest, 0 if mute else gain):
+                if not self._wait_stream_gain(route.source_id, dest, desired):
                     raise BackendError("Stream gain telemetry did not confirm the change")
             except BackendError as exc:
                 rollback = bool(self.bridge.ar_source_set_volume(source, int(capture), dest, old))
@@ -739,22 +817,129 @@ class WindowsBackend(AudioBackend):
             and self.devices[r.source_id].properties.get("feedback_group") == group
         ]
 
+    def _cable_master(self, device):
+        group = device.properties.get("feedback_group")
+        outputs = [
+            d
+            for d in self.devices.values()
+            if d.kind == "output"
+            and d.properties.get("virtual_driver") == "VB-CABLE"
+            and d.properties.get("feedback_group") == group
+        ]
+        return (
+            min(
+                outputs,
+                key=lambda d: (
+                    not d.default,
+                    "cable input" not in d.properties.get("device_description", d.name).casefold(),
+                    d.channels != 2,
+                    d.id,
+                ),
+            )
+            if outputs
+            else device
+        )
+
+    def _effective_route_gain(self, route, volume=None, muted=None):
+        gain = route.volume if volume is None else volume
+        if route.muted if muted is None else muted:
+            return 0.0
+        source = self.devices.get(route.source_id)
+        if (
+            self.cable_control_mode == "linked"
+            and source
+            and source.properties.get("virtual_driver") == "VB-CABLE"
+        ):
+            control = self._cable_master(source).properties.get("endpoint_controls", {})
+            value = control.get("volume")
+            if not control.get("volume_available") or type(value) not in (int, float) or not 0 <= value <= 1:
+                raise BackendError(
+                    "Windows cable volume is unavailable; select Route trim or refresh devices"
+                )
+            return 0.0 if control.get("muted") else gain * value
+        return gain
+
+    def _sync_cable_gains(self):
+        if self.cable_control_mode != "linked":
+            return
+        for route in self.routes.values():
+            source = self.devices.get(route.source_id)
+            if (
+                route.status != "connected"
+                or not source
+                or source.properties.get("virtual_driver") != "VB-CABLE"
+            ):
+                continue
+            if not self.capabilities().get("route_controls"):
+                raise BackendError("Rebuild the native DLL for Windows-linked cable volume")
+            native, capture = self._native_source(route.source_id)
+            target = self.get_device(route.destination_id).properties.get(
+                "native_endpoint_id", route.destination_id
+            )
+            desired = self._effective_route_gain(route)
+            self._read_stats()
+            observed = next(
+                (
+                    d.get("volume")
+                    for d in self._session_stats(route.source_id).get("devices", [])
+                    if d.get("id") == target
+                ),
+                None,
+            )
+            if type(observed) in (int, float) and abs(observed - desired) <= 0.0001:
+                continue
+            if not self.bridge.ar_source_set_volume(
+                native, int(capture), target, desired
+            ) or not self._wait_stream_gain(route.source_id, target, desired):
+                # Fail safely rather than continue at an unconfirmed old level.
+                stopped = bool(self.bridge.ar_source_start(native, int(capture), ""))
+                if stopped:
+                    self.active_sessions.pop(route.source_id, None)
+                message = "Windows-linked cable gain could not be verified; " + (
+                    "playback stopped" if stopped else "STOP FAILED: use Emergency Mute or exit A2Router"
+                )
+                for affected in self.routes.values():
+                    if affected.source_id == route.source_id:
+                        affected.status, affected.error = "error", message
+                        affected.resource_ids = []
+                raise BackendError(message)
+
     def set_cable_control_mode(self, mode):
-        if mode not in ("routes", "endpoint"):
+        if mode not in ("routes", "endpoint", "linked"):
             raise BackendError("Unknown cable volume scope")
+        if mode == "linked" and not self.capabilities().get("route_controls"):
+            raise BackendError("Rebuild the native DLL for Windows-linked managed playback")
+        previous = self.cable_control_mode
         self.cable_control_mode = mode
+        failures = self._apply() if self.bridge else {}
+        if failures:
+            self.cable_control_mode = previous
+            self._apply()
+            raise BackendError("Cable control mode could not be applied: " + "; ".join(failures.values()))
         self._update_cable_controls()
-        return "Cable controls: " + ("routed playback" if mode == "routes" else "Windows playback endpoint")
+        return (
+            "Cable controls: "
+            + {
+                "routes": "route trim",
+                "endpoint": "driver-managed Windows volume",
+                "linked": "Windows-linked managed playback",
+            }[mode]
+        )
 
     def _update_cable_controls(self):
         for device in self.devices.values():
             if device.properties.get("virtual_driver") != "VB-CABLE":
                 continue
-            if self.cable_control_mode == "endpoint":
-                target = self.devices.get(device.monitor_of, device)
+            if self.cable_control_mode in ("endpoint", "linked"):
+                target = self._cable_master(device)
                 device.properties["controls"] = {
                     **target.properties.get("endpoint_controls", {}),
-                    "scope": "Windows cable endpoint; enable Windows Volume Control in the VB-CABLE panel",
+                    "scope": (
+                        "Windows-linked managed playback; keep the vendor Windows Volume Control option OFF"
+                        if self.cable_control_mode == "linked"
+                        else "Driver-managed Windows cable endpoint; enable the vendor Windows Volume Control option"
+                    ),
+                    "control_endpoint_id": target.id,
                 }
                 continue
             routes = self._cable_routes(device)
@@ -809,6 +994,7 @@ class WindowsBackend(AudioBackend):
             if device:
                 device.properties["endpoint_controls"] = {**row["controls"], "observed_at": time.monotonic()}
                 device.properties["controls"] = {**row["controls"], "observed_at": time.monotonic()}
+        self._sync_cable_gains()
         self._update_cable_controls()
 
     def set_device_volume(self, device_id, volume):
@@ -818,7 +1004,7 @@ class WindowsBackend(AudioBackend):
         if device.properties.get("virtual_driver") == "VB-CABLE":
             if self.cable_control_mode == "routes":
                 return self._set_cable_controls(device, volume=volume)
-            device_id = device.monitor_of or device_id
+            device_id = self._cable_master(device).id
         if not self.capabilities()["device_controls"] or not self.bridge.ar_set_device_volume(
             device_id, volume
         ):
@@ -835,7 +1021,7 @@ class WindowsBackend(AudioBackend):
         if device.properties.get("virtual_driver") == "VB-CABLE":
             if self.cable_control_mode == "routes":
                 return self._set_cable_controls(device, muted=muted)
-            device_id = device.monitor_of or device_id
+            device_id = self._cable_master(device).id
         if not self.capabilities()["device_controls"] or not self.bridge.ar_set_device_mute(
             device_id, int(muted)
         ):
@@ -846,8 +1032,10 @@ class WindowsBackend(AudioBackend):
 
     def inspect_formats(self, device_id):
         self.get_device(device_id)
-        if self._physical_input(device_id) and not self.microphone_access:
-            raise BackendError("Enable microphone/input access in Settings before probing its formats")
+        if self._recording_input(device_id) and not self.microphone_access:
+            raise BackendError("Enable recording access in Devices → Inputs before probing its formats")
+        if self._physical_input(device_id) and not self.physical_microphone_access:
+            raise BackendError("Enable physical microphones in Devices → Inputs before probing their formats")
         if not self.capabilities()["device_configuration"]:
             raise BackendError("Rebuild the native bridge to configure formats")
         payload = self.bridge.ar_device_formats(device_id)
@@ -888,8 +1076,12 @@ class WindowsBackend(AudioBackend):
     def configure_device_format(self, device_id, config):
         self._validate_format(config)
         self.get_device(device_id)
-        if self._physical_input(device_id) and not self.microphone_access:
-            raise BackendError("Enable microphone/input access in Settings before configuring its format")
+        if self._recording_input(device_id) and not self.microphone_access:
+            raise BackendError("Enable recording access in Devices → Inputs before configuring its format")
+        if self._physical_input(device_id) and not self.physical_microphone_access:
+            raise BackendError(
+                "Enable physical microphones in Devices → Inputs before configuring their format"
+            )
         if not self.capabilities()["device_configuration"]:
             raise BackendError("Native device configuration is unavailable")
         group = self.get_device(device_id).properties.get("feedback_group")
@@ -1059,6 +1251,8 @@ class WindowsBackend(AudioBackend):
             **super().diagnostics(),
             "telemetry": self.telemetry,
             "microphone_access_allowed": self.microphone_access,
+            "recording_access_allowed": self.microphone_access,
+            "physical_microphone_access_allowed": self.physical_microphone_access,
             "physical_input_sessions": [
                 source for source in self.active_sessions if self._physical_input(source)
             ],
@@ -1085,3 +1279,4 @@ class WindowsBackend(AudioBackend):
         self.active_matrices.clear()
         self.source_endpoints.clear()
         self.microphone_access = False
+        self.physical_microphone_access = False

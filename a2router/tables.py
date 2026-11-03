@@ -27,6 +27,8 @@ class DeviceModel(QAbstractTableModel):
         super().__init__(parent)
         self.kind, self.rows = kind, []
         self.columns = ["Name", "Type", "Device ID", "Channels", "Rate (Hz)", "Format", "State"]
+        if kind == "input":
+            self.columns += ["Recording access"]
         if kind == "output":
             self.columns += ["Volume (%)", "Mute", "Peak (dBFS)"]
 
@@ -67,6 +69,11 @@ class DeviceModel(QAbstractTableModel):
             device.get("sample_format"),
             device_state_label(device["state"]),
         ]
+        if self.kind == "input":
+            access = device.get("properties", {}).get("recording_access")
+            values.append(
+                "Allowed" if access is True else "Off" if access is False else "Not a recording endpoint"
+            )
         if self.kind == "output":
             import math
 

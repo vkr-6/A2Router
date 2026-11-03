@@ -25,6 +25,15 @@ inline ComPtr<IMMDevice> endpoint(const wchar_t* id) {
     return device;
 }
 inline void controls(std::ostream& out, IMMDevice* device) {
+    ComPtr<IMMEndpoint> endpointFlow;
+    EDataFlow flow = eAll;
+    if (FAILED(device->QueryInterface(IID_PPV_ARGS(&endpointFlow))) ||
+        FAILED(endpointFlow->GetDataFlow(&flow)) || flow != eRender) {
+        // Even activating endpoint volume can wake some capture drivers. Input
+        // discovery/polling must not activate any capture endpoint interface.
+        out << "{\"volume_available\":false,\"peak_available\":false}";
+        return;
+    }
     out << '{';
     ComPtr<IAudioEndpointVolume> volume;
     float level = 0; BOOL muted = FALSE;
@@ -35,13 +44,9 @@ inline void controls(std::ostream& out, IMMDevice* device) {
     if (hasVolume) out << ",\"volume\":" << std::clamp(level, 0.0f, 1.0f) << ",\"muted\":" << (muted ? "true" : "false");
     ComPtr<IAudioMeterInformation> meter;
     float peak = 0;
-    ComPtr<IMMEndpoint> endpointFlow;
-    EDataFlow flow = eAll;
-    const bool render = SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&endpointFlow))) &&
-        SUCCEEDED(endpointFlow->GetDataFlow(&flow)) && flow == eRender;
     // Input metering may activate capture and Windows' microphone indicator.
     // Discovery/volume refresh must never open a microphone to draw a meter.
-    const bool hasPeak = render && SUCCEEDED(device->Activate(__uuidof(IAudioMeterInformation), CLSCTX_ALL, nullptr,
+    const bool hasPeak = SUCCEEDED(device->Activate(__uuidof(IAudioMeterInformation), CLSCTX_ALL, nullptr,
         reinterpret_cast<void**>(meter.GetAddressOf()))) && SUCCEEDED(meter->GetPeakValue(&peak)) && std::isfinite(peak);
     out << ",\"peak_available\":" << (hasPeak ? "true" : "false");
     if (hasPeak) out << ",\"peak\":" << std::clamp(peak, 0.0f, 1.0f);

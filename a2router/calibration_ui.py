@@ -153,13 +153,15 @@ class CalibrationPanel(QWidget):
                     self.outputs.addItem(item)
             self.microphone_changed()
         capable = w.backend.capabilities().get("calibration", False)
-        access = getattr(w.backend, "microphone_access", True)
+        access = getattr(w.backend, "microphone_access", True) and getattr(
+            w.backend, "physical_microphone_access", True
+        )
         requirements = []
         if self.outputs.count() < 2:
             requirements.append("Connect at least two physical outputs for relative-delay calibration.")
         if not access:
             requirements.append(
-                "Microphone capture is off; allow it in Settings → Microphone privacy when needed."
+                "Allow recording and enable physical microphones in Devices → Inputs when needed."
             )
         self.requirements.setText(" ".join(requirements))
         self.requirements.setVisible(bool(requirements))
@@ -172,7 +174,7 @@ class CalibrationPanel(QWidget):
             and self.outputs.count() >= 2
         )
         self.start.setToolTip(
-            "Enable microphone/input capture in Settings first"
+            "Enable recording access in Devices → Inputs first"
             if not access
             else "Choose two or more physical outputs and one microphone"
             if capable and self.outputs.count() < 2

@@ -37,18 +37,26 @@ read-only endpoint property store, rather than activating `IAudioClient`. Genera
 loopback aliases are excluded from duplicate mixer controls. Polling is serialized
 off the GUI thread. Volume control does not restart source sessions.
 
-Physical microphone capture requires Settings → Privacy permission for this
-session. It starts disabled and is never restored from a saved profile. Revocation
-cancels calibration and stops physical input sessions; virtual-cable routing remains
-independent. Old native DLLs lack passive discovery; the GUI explains that a rebuild
-is required. The native privacy extension is additive to bridge ABI 2.
+Devices → Inputs has separate **Allow recording inputs** and **Enable physical
+microphones** session switches. Both default off. The first permits VB-CABLE capture;
+the second permits physical microphones too. All-recording revocation also invokes
+the additive native recording gate, cancels measurement and destroys input sessions.
+Physical-microphone revocation stops microphone routes while cable capture continues.
+Neither permission is loaded from profiles. Windows can display its microphone
+indicator for virtual recording even when physical microphones remain off. Updated
+input discovery/polling activates no audio, volume, meter or topology interfaces.
+Old native DLLs display an upgrade notice; rebuild using the manual workflow.
 
-VB-CABLE defaults to Windows playback-endpoint control; route trim remains separate.
-Enable **Windows Volume Control** in the official VB-CABLE panel for its Windows
-playback slider to affect audio. This vendor option is not changed automatically.
-Recording-endpoint sliders are not equivalent to playback gain. Endpoint readback
-verifies Windows values, not the driver's audible application of gain. See the
-[vendor manual](https://vb-audio.com/Cable/VBCABLE_ReferenceManual.pdf).
+VB-CABLE defaults to **Windows-linked managed playback**. App changes write/read
+`IAudioEndpointVolume` on the actual cable playback endpoint. External changes are
+polled and applied with the existing native stream-volume API to managed cable
+outputs. Effective gain is master × route trim, or zero if either stage is muted.
+Profile trims are preserved. **Windows volume (driver-managed)** omits the master
+factor for installations with the vendor **Windows Volume Control** option enabled;
+keep that option disabled in linked mode to avoid applying gain twice. Mode choices
+are retained separately from profiles. Other applications recording from VB-CABLE
+still require vendor volume support. No private driver registry values are written.
+See the [vendor manual](https://vb-audio.com/Cable/VBCABLE_ReferenceManual.pdf).
 
 The top navigation and manual synchronization workflow are documented in [the user guide](user-guide.md). Rename verification now reacquires endpoint/property-store instances; write/commit access-denied HRESULTs reach the explicit elevation flow. A rejected unchanged write does not attempt rollback. This change still requires a target-machine Windows DLL build and rename check.
 

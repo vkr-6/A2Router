@@ -37,6 +37,15 @@ def test_native_endpoint_discovery(backend):
             assert device.channels > 0 and device.sample_rate > 0
 
 
+def test_native_recording_guard_rejects_capture_before_opening_endpoints(backend):
+    assert backend.capabilities()["recording_access_guard"], "Rebuild the native privacy extension"
+    assert backend.bridge.ar_set_capture_access(0) == 1
+    assert backend.bridge.ar_source_start("deliberately-invalid-input", 1, "invalid-output") == 0
+    assert "Recording access is off" in backend._error()
+    assert backend.bridge.ar_calibration_record("invalid-input", "invalid-output", -36, 0) is None
+    assert "Recording access is off" in backend._error()
+
+
 def test_native_vm_fanout_fanin_pcm_and_input(backend, tmp_path):
     if os.environ.get("A2ROUTER_VM_AUDIO_TEST") != "1":
         pytest.skip("PCM emission/capture is confined to the disposable Windows VM")
@@ -109,6 +118,7 @@ def test_native_vm_fanout_fanin_pcm_and_input(backend, tmp_path):
         inputs = [d for d in backend.list_devices() if d.kind == "input" and not d.monitor_of]
         assert inputs, "Emulated capture endpoint required"
         backend.set_microphone_access(True)
+        backend.set_physical_microphone_access(True)
         microphone = backend.create_route(inputs[0].id, dest_b.id, monitoring_confirmed=True)
         assert microphone.status == "connected", microphone.error
         for route in list(backend.list_routes()):

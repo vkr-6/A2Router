@@ -328,6 +328,7 @@ def test_virtual_tab_shows_existing_cable_and_configures_capture_16_channels(app
     from a2router.backends.windows import WindowsBackend
 
     backend = WindowsBackend(ConfigurationBridge())
+    backend.set_microphone_access(True)
     window = MainWindow(Controller(backend))
     try:
         wait(app, window)
@@ -384,12 +385,13 @@ def test_shared_cable_has_one_mixer_strip_and_controls_managed_streams(app, tmp_
 
     bridge = StreamBridge()
     backend = WindowsBackend(bridge)
+    backend.set_microphone_access(True)
     backend.refresh()
     route = backend.create_route("cable-out", "headphones")
     window = MainWindow(Controller(backend), tmp_path / "session.json")
     try:
         wait(app, window)
-        assert backend.cable_control_mode == "endpoint"
+        assert backend.cable_control_mode == "linked"
         window.cable_volume_scope.setCurrentIndex(window.cable_volume_scope.findData("routes"))
         wait(app, window)
         window.navigation.setCurrentRow(1)

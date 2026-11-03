@@ -189,23 +189,31 @@ class Studio:
         preferences.setMaximumWidth(520)
         settings.layout().insertWidget(0, preferences)
         if hasattr(w.backend, "set_microphone_access"):
-            privacy = QGroupBox("Microphone privacy")
+            privacy = QGroupBox("Recording access")
             privacy_layout = QVBoxLayout(privacy)
-            self.microphone_access = QCheckBox("Allow microphone/input capture for this session")
+            self.microphone_access = QCheckBox("Allow recording inputs for this session")
             self.microphone_access.setToolTip(
-                "Off at startup. Only enable when routing a microphone or measuring calibration. "
-                "Turning it off stops microphone routes; system audio and cable routing continue."
+                "Off at startup. Blocks all recording inputs, including VB-CABLE, when off. "
+                "Enable only for input/cable routing or calibration. Windows can show a microphone "
+                "indicator for virtual-cable recording even when no physical microphone is used."
             )
             self.microphone_access.toggled.connect(w.change_microphone_access)
             privacy_layout.addWidget(self.microphone_access)
-            if not w.backend.capabilities().get("passive_input_discovery", False):
+            self.physical_microphone_access = QCheckBox("Enable physical microphones for this session")
+            self.physical_microphone_access.setToolTip(
+                "Off at startup. Leave off for VB-CABLE routing. Turning it off stops microphone "
+                "routes and calibration while cable routing continues."
+            )
+            self.physical_microphone_access.toggled.connect(w.change_physical_microphone_access)
+            privacy_layout.addWidget(self.physical_microphone_access)
+            if not w.backend.capabilities().get("recording_access_guard", False):
                 notice = QLabel(
-                    "This native DLL predates passive input discovery; rebuild/update the portable app for the privacy fix."
+                    "Rebuild/update the native DLL to enforce recording access inside the engine."
                 )
                 notice.setWordWrap(True)
                 privacy_layout.addWidget(notice)
             privacy.setMaximumWidth(520)
-            settings.layout().insertWidget(1, privacy)
+            self.input_table.layout().insertWidget(0, privacy)
         settings.layout().addStretch(1)
         w.navigation.clear()
         for title, page in zip(
@@ -491,6 +499,9 @@ class Studio:
 
             with QSignalBlocker(self.microphone_access):
                 self.microphone_access.setChecked(self.window.backend.microphone_access)
+            with QSignalBlocker(self.physical_microphone_access):
+                self.physical_microphone_access.setChecked(self.window.backend.physical_microphone_access)
+            self.physical_microphone_access.setEnabled(self.window.backend.microphone_access)
         self.matrix.refresh()
         for table in (self.input_table, self.output_table):
             table.model.update_devices(snapshot["devices"])

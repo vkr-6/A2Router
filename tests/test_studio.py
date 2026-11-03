@@ -508,6 +508,9 @@ def test_microphone_capture_is_opt_in_and_can_be_stopped_independently(app):
         assert microphone.enabled and desktop.status == "connected"
         window.studio.microphone_access.click()
         wait(app, window)
+        assert microphone.status != "connected"
+        window.studio.physical_microphone_access.click()
+        wait(app, window)
         assert microphone.status == "connected" and "mic" in bridge.sessions
         window.studio.microphone_access.click()
         wait(app, window)
@@ -542,4 +545,62 @@ def test_revoking_microphone_access_discards_queued_enable(app):
         assert not any(source == "mic" and outputs for source, _, outputs in bridge.starts)
     finally:
         release.set()
+        shutdown(app, window)
+
+
+def test_recording_switch_is_in_devices_inputs_and_stops_cable_capture(app):
+    from test_device_controls import StreamBridge
+
+    from a2router.backends.windows import WindowsBackend
+
+    bridge = StreamBridge()
+    backend = WindowsBackend(bridge)
+    backend.refresh()
+    route = backend.create_route("cable-out", "headphones")
+    window = MainWindow(Controller(backend))
+    try:
+        wait(app, window)
+        window.show()
+        window.navigation.setCurrentRow(2)
+        window.studio.device_tabs.setCurrentIndex(1)
+        switch = window.studio.microphone_access
+        assert switch.isVisible() and not switch.isChecked() and not bridge.sessions
+        assert window.studio.input_table.isAncestorOf(switch)
+        row = next(i for i, d in enumerate(window.studio.input_table.model.rows) if d["id"] == "cable-out")
+        model = window.studio.input_table.model
+        assert model.data(model.index(row, 7)) == "Off"
+        switch.click()
+        wait(app, window)
+        assert route.status == "connected" and "cable-out" in bridge.sessions
+        assert model.data(model.index(row, 7)) == "Allowed"
+        switch.click()
+        wait(app, window)
+        assert not bridge.sessions and route.enabled
+    finally:
+        shutdown(app, window)
+
+
+def test_windows_linked_volume_keeps_following_on_settings_page(app):
+    from test_device_controls import StreamBridge
+
+    from a2router.backends.windows import WindowsBackend
+
+    bridge = StreamBridge()
+    backend = WindowsBackend(bridge)
+    backend.set_microphone_access(True)
+    backend.refresh()
+    backend.create_route("cable-out", "headphones")
+    window = MainWindow(Controller(backend))
+    try:
+        wait(app, window)
+        window.navigation.setCurrentRow(4)
+        bridge.volume = 0.25
+        window.poll_meters()
+        wait(app, window)
+        assert bridge.sessions["cable-out"]["devices"][0]["volume"] == 0.25
+        window.cable_volume_scope.setCurrentIndex(window.cable_volume_scope.findData("endpoint"))
+        wait(app, window)
+        assert window.cable_preferences.value("cableVolumeMode") == "endpoint"
+        assert bridge.sessions["cable-out"]["devices"][0]["volume"] == 1
+    finally:
         shutdown(app, window)
