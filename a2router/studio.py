@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
@@ -187,6 +188,24 @@ class Studio:
         form.addRow("Density", self.density)
         preferences.setMaximumWidth(520)
         settings.layout().insertWidget(0, preferences)
+        if hasattr(w.backend, "set_microphone_access"):
+            privacy = QGroupBox("Microphone privacy")
+            privacy_layout = QVBoxLayout(privacy)
+            self.microphone_access = QCheckBox("Allow microphone/input capture for this session")
+            self.microphone_access.setToolTip(
+                "Off at startup. Only enable when routing a microphone or measuring calibration. "
+                "Turning it off stops microphone routes; system audio and cable routing continue."
+            )
+            self.microphone_access.toggled.connect(w.change_microphone_access)
+            privacy_layout.addWidget(self.microphone_access)
+            if not w.backend.capabilities().get("passive_input_discovery", False):
+                notice = QLabel(
+                    "This native DLL predates passive input discovery; rebuild/update the portable app for the privacy fix."
+                )
+                notice.setWordWrap(True)
+                privacy_layout.addWidget(notice)
+            privacy.setMaximumWidth(520)
+            settings.layout().insertWidget(1, privacy)
         settings.layout().addStretch(1)
         w.navigation.clear()
         for title, page in zip(
@@ -285,7 +304,7 @@ class Studio:
         menus["File"].addSeparator()
         menus["File"].addAction("Exit", w.exit_application)
         menus["Edit"].addAction("Copy selected device rows", self.copy_rows)
-        menus["Edit"].addAction("Filter inputs", lambda: self.input_table.filter.setFocus(), "Ctrl+F")
+        menus["Edit"].addAction("Filter inputs", self.filter_inputs, "Ctrl+F")
         for index, button in enumerate(w.navigation.buttons):
             menus["View"].addAction(
                 button.text(), lambda checked=False, i=index: w.navigation.setCurrentRow(i)
@@ -321,11 +340,7 @@ class Studio:
         )
         menus["Help"].addAction(
             "About A2Router",
-            lambda: QMessageBox.about(
-                w,
-                "A2Router",
-                "A2Router — Advanced Audio Router\nNative WASAPI / PipeWire audio routing\nBased on MultiRoute. Developed with OpenAI Codex.\nVB-CABLE © VB-Audio Software.",
-            ),
+            self.show_about,
         )
         refresh = QAction(w)
         refresh.setShortcut("F5")
@@ -443,19 +458,39 @@ class Studio:
             self.input_table.selected_text() + "\n" + self.output_table.selected_text()
         )
 
+    def show_about(self):
+        from a2router.build_info import about_text
+
+        QMessageBox.about(self.window, "A2Router", about_text())
+
     def device_properties(self):
-        selected = self.output_table.view.currentIndex().data(
-            Qt.UserRole
-        ) or self.input_table.view.currentIndex().data(Qt.UserRole)
+        active = self.device_tabs.currentIndex()
+        if active not in (0, 1):
+            self.window.error.setText("Select an input or output in Devices before opening its properties")
+            return
+        table = self.output_table if active == 0 else self.input_table
+        selected = table.view.currentIndex().data(Qt.UserRole)
         if selected:
             self.window.navigation.setCurrentRow(2)
             for index in range(self.window.device_tree.topLevelItemCount()):
                 item = self.window.device_tree.topLevelItem(index)
                 if item.data(0, Qt.UserRole) == selected:
                     self.window.device_tree.setCurrentItem(item)
+                    self.window.inspect_device()
+                    self.window.device_details.show()
                     break
 
+    def filter_inputs(self):
+        self.window.navigation.setCurrentRow(2)
+        self.device_tabs.setCurrentIndex(1)
+        self.input_table.filter.setFocus(Qt.ShortcutFocusReason)
+
     def update(self, snapshot):
+        if hasattr(self, "microphone_access"):
+            from PySide6.QtCore import QSignalBlocker
+
+            with QSignalBlocker(self.microphone_access):
+                self.microphone_access.setChecked(self.window.backend.microphone_access)
         self.matrix.refresh()
         for table in (self.input_table, self.output_table):
             table.model.update_devices(snapshot["devices"])
@@ -472,7 +507,7 @@ class Studio:
         if diagnostics.get("error"):
             state = "Error"
         self.status.setText(
-            f"{state} · {self.window.backend.name} · {count_in} sources / {count_out} outputs"
+            f"{state} · {self.window.backend.name} · {count_in} active sources / {count_out} active outputs"
         )
         self.window.setWindowTitle(f"A2Router — {profile}{' *' if dirty else ''}")
         if self.profile_path:

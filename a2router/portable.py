@@ -8,6 +8,7 @@ from pathlib import Path
 
 from a2router.__main__ import main as cli_main
 from a2router.backends import make_backend
+from a2router.build_info import read_build_info
 from a2router.controller import Controller, config_dir
 
 
@@ -15,8 +16,10 @@ def smoke_test(report_path, mock=False):
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
 
+    from a2router.branding import prepare_windows_identity
     from a2router.ui import MainWindow
 
+    prepare_windows_identity()
     backend = make_backend(mock)
     app = QApplication.instance() or QApplication([])
     app.setApplicationName("A2Router")
@@ -36,6 +39,7 @@ def smoke_test(report_path, mock=False):
         reference = chirp(16000)
         fft_ok = bool(np.max(np.abs(np.fft.irfft(np.fft.rfft(reference), len(reference)) - reference)) < 1e-9)
         data = {
+            "build": read_build_info(),
             "window_title": window.windowTitle(),
             "qt_platform": app.platformName(),
             "frozen": bool(getattr(sys, "frozen", False)),

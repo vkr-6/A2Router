@@ -108,6 +108,7 @@ def test_native_vm_fanout_fanin_pcm_and_input(backend, tmp_path):
             assert route.status == "connected", route.error
         inputs = [d for d in backend.list_devices() if d.kind == "input" and not d.monitor_of]
         assert inputs, "Emulated capture endpoint required"
+        backend.set_microphone_access(True)
         microphone = backend.create_route(inputs[0].id, dest_b.id, monitoring_confirmed=True)
         assert microphone.status == "connected", microphone.error
         for route in list(backend.list_routes()):

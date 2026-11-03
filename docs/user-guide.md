@@ -11,11 +11,10 @@ cancels calibration without resuming playback. Ordinary stop remains serialized 
 can wait behind an active control operation.
 
 Mixer uses narrow observed peak meters, not history graphs. Physical endpoint levels
-affect other applications. VB-CABLE is grouped once and uses A2Router stream gain,
-which does not change the vendor endpoint master volume. Its input meter is before
-routed gain, so it can still move while routed playback is muted. With no cable
-routes, an old DLL, or differing route gains, controls explain their limitation.
-Adjust differing gains using Selected route level in Routing.
+affect other applications. VB-CABLE is grouped once; its default control scope is
+Windows playback endpoint. Route trim is a separate, explicitly selected gain stage.
+The cable input meter is before routed gain, so it can still move while routed
+playback is muted. Adjust differing route gains using Selected route level in Routing.
 
 Devices combines input/output inventory and Configure. Physical endpoints and cable
 pins can be selected for exact format scanning where the backend supports it. Only
@@ -53,6 +52,17 @@ microphone fixed at the listening position, hardware volume safe and other apps
 quiet. A confirmation precedes sequential first-channel chirps. Native recording and
 playback are separate from GUI rendering; Python analyzes only completed recordings.
 
+Windows microphone/input capture is off on every application start. Enable
+Settings → Privacy → Allow microphone/input capture for this session before
+microphone routing, microphone format scanning or calibration. The choice is not
+saved in profiles. Turning it off cancels calibration and stops managed physical
+input capture while retaining route definitions and other audio routes. Discovery
+reads configured input format properties without opening an input audio client;
+input peak metering is unavailable to avoid activating idle microphones. Rebuild
+the native DLL to obtain this discovery change. Active virtual-cable recording
+routes can still appear as recording activity in Windows; they are separate from
+physical microphone capture. Windows microphone permissions must also allow access.
+
 Measurement stops managed routes temporarily and restores their previous enabled
 states after completion, cancellation or failure. Cancel stops the current test.
 Emergency Mute/Exit suppress restoration of playback. Invalid request preflight does
@@ -81,8 +91,10 @@ System/White/Dark/Lime/Blue/Violet alternatives. Original outline navigation ico
 use neutral text colour when idle and the theme accent when active. Settings also
 provides density controls. This branding update switches existing installations to Orange
 once; subsequent theme choices are preserved. Application and packaging icons use
-only the orbital-A mark from the supplied PNG. README branding retains the full
-wordmark. Windows ICO sizes preserve the mark’s proportions. The Diagnostics page
+only the orbital-A mark from the supplied PNG, centered on a square transparent
+canvas. README branding retains the full wordmark. Windows ICO sizes preserve the
+mark’s proportions; rebuilt packages update the application and shortcut icons.
+Windows can retain cached icons for older shortcuts. The Diagnostics page
 and GUI export/log controls have been removed. Backend errors remain visible in
 the status bar, and existing command-line diagnostics are still available.
 

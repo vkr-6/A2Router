@@ -151,42 +151,53 @@ void writeDevice(std::ostream& out, IMMDevice* device, const std::wstring& name,
             out << ",\"device_format\":"; a2r::writeFormat(out, f);
         }
     }
-    PropVariantClear(&configured);
+    if (input) out << ",\"format_source\":\"configured endpoint property; capture is not opened by discovery\"";
     out << '}';
-    ComPtr<IAudioClient> client;
-    if (SUCCEEDED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-            reinterpret_cast<void**>(client.GetAddressOf())))) {
-        WAVEFORMATEX* format = nullptr;
-        if (SUCCEEDED(client->GetMixFormat(&format))) {
-            DWORD mask = 0;
-            WORD tag = format->wFormatTag;
-            if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE && format->cbSize >= 22) {
-                auto* extended = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(format);
-                mask = extended->dwChannelMask;
-                tag = static_cast<WORD>(extended->SubFormat.Data1);
-            }
-            std::string encoding = tag == WAVE_FORMAT_IEEE_FLOAT ? "float" : (tag == WAVE_FORMAT_PCM ? "pcm" : "wave-tag-" + std::to_string(tag));
-            out << ",\"channels\":" << format->nChannels << ",\"sample_rate\":" << format->nSamplesPerSec
-                << ",\"sample_format\":" << quote(encoding + std::to_string(format->wBitsPerSample) + "le")
-                << ",\"positions\":[";
-            const char* names[] = {"front-left", "front-right", "front-center", "lfe", "rear-left", "rear-right",
-                "front-left-of-center", "front-right-of-center", "rear-center", "side-left", "side-right", "top-center",
-                "top-front-left", "top-front-center", "top-front-right", "top-rear-left", "top-rear-center", "top-rear-right"};
-            bool first = true;
-            for (int bit = 0; bit < 18; ++bit) if (mask & (1u << bit)) {
-                if (!first) out << ',';
-                out << quote(names[bit]); first = false;
-            }
-            // WAVEFORMATEX defines conventional mono/stereo order without a mask.
-            if (!mask && format->nChannels == 1) out << quote("mono");
-            if (!mask && format->nChannels == 2) out << quote("front-left") << ',' << quote("front-right");
-            out << ']';
-            CoTaskMemFree(format);
+    const auto writeSpecification = [&](const WAVEFORMATEX* format) {
+        DWORD mask = 0;
+        WORD tag = format->wFormatTag;
+        if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE && format->cbSize >= 22) {
+            auto* extended = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(format);
+            mask = extended->dwChannelMask;
+            tag = static_cast<WORD>(extended->SubFormat.Data1);
         }
-        REFERENCE_TIME normal = 0, minimum = 0;
-        if (SUCCEEDED(client->GetDevicePeriod(&normal, &minimum)))
-            out << ",\"latency\":{\"default_period_us\":" << normal / 10 << ",\"minimum_period_us\":" << minimum / 10 << '}';
+        std::string encoding = tag == WAVE_FORMAT_IEEE_FLOAT ? "float" : (tag == WAVE_FORMAT_PCM ? "pcm" : "wave-tag-" + std::to_string(tag));
+        out << ",\"channels\":" << format->nChannels << ",\"sample_rate\":" << format->nSamplesPerSec
+            << ",\"sample_format\":" << quote(encoding + std::to_string(format->wBitsPerSample) + "le")
+            << ",\"positions\":[";
+        const char* names[] = {"front-left", "front-right", "front-center", "lfe", "rear-left", "rear-right",
+            "front-left-of-center", "front-right-of-center", "rear-center", "side-left", "side-right", "top-center",
+            "top-front-left", "top-front-center", "top-front-right", "top-rear-left", "top-rear-center", "top-rear-right"};
+        bool first = true;
+        for (int bit = 0; bit < 18; ++bit) if (mask & (1u << bit)) {
+            if (!first) out << ',';
+            out << quote(names[bit]); first = false;
+        }
+        // WAVEFORMATEX defines conventional mono/stereo order without a mask.
+        if (!mask && format->nChannels == 1) out << quote("mono");
+        if (!mask && format->nChannels == 2) out << quote("front-left") << ',' << quote("front-right");
+        out << ']';
+    };
+    if (input) {
+        if (configured.vt == VT_BLOB && configured.blob.cbSize >= sizeof(WAVEFORMATEX)) {
+            auto* f = reinterpret_cast<const WAVEFORMATEX*>(configured.blob.pBlobData);
+            if (configured.blob.cbSize >= sizeof(WAVEFORMATEX) + f->cbSize) writeSpecification(f);
+        }
+    } else {
+        ComPtr<IAudioClient> client;
+        if (SUCCEEDED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
+                reinterpret_cast<void**>(client.GetAddressOf())))) {
+            WAVEFORMATEX* format = nullptr;
+            if (SUCCEEDED(client->GetMixFormat(&format))) {
+                writeSpecification(format);
+                CoTaskMemFree(format);
+            }
+            REFERENCE_TIME normal = 0, minimum = 0;
+            if (SUCCEEDED(client->GetDevicePeriod(&normal, &minimum)))
+                out << ",\"latency\":{\"default_period_us\":" << normal / 10 << ",\"minimum_period_us\":" << minimum / 10 << '}';
+        }
     }
+    PropVariantClear(&configured);
     out << '}';
 }
 bool startSession(const std::wstring& source, bool input, const wchar_t* ids, const wchar_t* delayList = nullptr, const wchar_t* matrixList = nullptr, const wchar_t* volumeList = nullptr) {
@@ -565,6 +576,7 @@ API int ar_rename_device(const wchar_t* id, const wchar_t* name) {
 }
 
 // Additive, versioned controls retain the existing API-v2 ABI.
+API int ar_privacy_version() { return 1; }
 API int ar_routing_controls_version() { return 1; }
 API int ar_source_start_config(const wchar_t* source, int input, const wchar_t* ids,
                               const wchar_t* delays, const wchar_t* matrices, const wchar_t* volumes) {

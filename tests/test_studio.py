@@ -448,3 +448,98 @@ def test_suspended_virtual_device_is_idle_and_routable(app):
         assert route.status == "connected"
     finally:
         shutdown(app, window)
+
+
+@pytest.mark.parametrize("start_page", [0, 1])
+def test_filter_inputs_reveals_device_page_and_input_tab(app, start_page):
+    window = MainWindow(Controller(MockBackend()))
+    try:
+        wait(app, window)
+        window.show()
+        window.navigation.setCurrentRow(start_page)
+        edit = next(a.menu() for a in window.menuBar().actions() if a.text() == "Edit")
+        next(a for a in edit.actions() if a.text() == "Filter inputs").trigger()
+        app.processEvents()
+        assert window.navigation.currentRow() == 2
+        assert window.studio.device_tabs.currentIndex() == 1
+        assert window.studio.input_table.filter.isVisible()
+        assert window.studio.input_table.filter.hasFocus()
+    finally:
+        shutdown(app, window)
+
+
+def test_device_properties_use_active_input_and_ignore_stale_output(app):
+    window = MainWindow(Controller(MockBackend()))
+    try:
+        wait(app, window)
+        window.show()
+        window.navigation.setCurrentRow(2)
+        for table, ident in ((window.studio.output_table, "speakers"), (window.studio.input_table, "mic")):
+            row = next(
+                r for r in range(table.proxy.rowCount()) if table.proxy.index(r, 0).data(Qt.UserRole) == ident
+            )
+            table.view.setCurrentIndex(table.proxy.index(row, 0))
+        window.studio.device_tabs.setCurrentIndex(1)
+        window.studio.device_properties()
+        assert window.device_tree.currentItem().data(0, Qt.UserRole) == "mic"
+        assert window.device_details.isVisible()
+        window.studio.device_tabs.setCurrentIndex(2)
+        window.studio.device_properties()
+        assert "Select an input or output" in window.error.text()
+        assert "active sources /" in window.studio.status.text()
+    finally:
+        shutdown(app, window)
+
+
+def test_microphone_capture_is_opt_in_and_can_be_stopped_independently(app):
+    from test_windows import Bridge
+
+    from a2router.backends.windows import WindowsBackend
+
+    bridge = Bridge()
+    backend = WindowsBackend(bridge)
+    backend.refresh()
+    microphone = backend.create_route("mic", "headphones", monitoring_confirmed=True)
+    desktop = backend.create_route("wasapi-loopback:default", "hdmi")
+    window = MainWindow(Controller(backend))
+    try:
+        wait(app, window)
+        assert not backend.microphone_access and "mic" not in bridge.sessions
+        assert microphone.enabled and desktop.status == "connected"
+        window.studio.microphone_access.click()
+        wait(app, window)
+        assert microphone.status == "connected" and "mic" in bridge.sessions
+        window.studio.microphone_access.click()
+        wait(app, window)
+        assert not backend.microphone_access and "mic" not in bridge.sessions
+        assert desktop.status == "connected" and microphone.enabled
+        assert WindowsBackend(Bridge()).microphone_access is False
+    finally:
+        shutdown(app, window)
+
+
+def test_revoking_microphone_access_discards_queued_enable(app):
+    import threading
+
+    from test_windows import Bridge
+
+    from a2router.backends.windows import WindowsBackend
+
+    bridge = Bridge()
+    backend = WindowsBackend(bridge)
+    backend.refresh()
+    backend.create_route("mic", "headphones", monitoring_confirmed=True)
+    window = MainWindow(Controller(backend))
+    release = threading.Event()
+    try:
+        wait(app, window)
+        window.submit(lambda: release.wait(3), persist=False, background=True)
+        window.change_microphone_access(True)
+        window.change_microphone_access(False)
+        release.set()
+        wait(app, window)
+        assert not backend.microphone_access and "mic" not in bridge.sessions
+        assert not any(source == "mic" and outputs for source, _, outputs in bridge.starts)
+    finally:
+        release.set()
+        shutdown(app, window)

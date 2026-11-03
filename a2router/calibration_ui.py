@@ -71,6 +71,10 @@ class CalibrationPanel(QWidget):
         actions.addWidget(self.cancel)
         actions.addStretch()
         layout.addLayout(actions)
+        self.requirements = QLabel()
+        self.requirements.setObjectName("MutedText")
+        self.requirements.setWordWrap(True)
+        layout.addWidget(self.requirements)
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
@@ -149,15 +153,30 @@ class CalibrationPanel(QWidget):
                     self.outputs.addItem(item)
             self.microphone_changed()
         capable = w.backend.capabilities().get("calibration", False)
+        access = getattr(w.backend, "microphone_access", True)
+        requirements = []
+        if self.outputs.count() < 2:
+            requirements.append("Connect at least two physical outputs for relative-delay calibration.")
+        if not access:
+            requirements.append(
+                "Microphone capture is off; allow it in Settings → Microphone privacy when needed."
+            )
+        self.requirements.setText(" ".join(requirements))
+        self.requirements.setVisible(bool(requirements))
         self.start.setEnabled(
             capable
+            and access
             and not self.running
             and not w.busy
             and self.microphone.count() > 0
             and self.outputs.count() >= 2
         )
         self.start.setToolTip(
-            "Real WASAPI microphone capture and chirp playback"
+            "Enable microphone/input capture in Settings first"
+            if not access
+            else "Choose two or more physical outputs and one microphone"
+            if capable and self.outputs.count() < 2
+            else "Real WASAPI microphone capture and chirp playback"
             if capable
             else "Requires the updated native Windows calibration API; not available on Linux"
         )

@@ -229,6 +229,7 @@ def test_cable_stream_gain_is_live_shared_across_pins_and_restored_on_restart():
     bridge = StreamBridge()
     backend = WindowsBackend(bridge)
     backend.refresh()
+    backend.set_cable_control_mode("routes")
     route = backend.create_route("cable-out", "headphones")
     starts = len(bridge.starts)
     backend.set_device_volume("cable-16", 0.3)
@@ -250,6 +251,7 @@ def test_failed_cable_gain_rolls_back_successful_outputs():
     bridge = StreamBridge()
     backend = WindowsBackend(bridge)
     backend.refresh()
+    backend.set_cable_control_mode("routes")
     first = backend.create_route("cable-out", "headphones")
     second = backend.create_route("cable-out", "hdmi")
     bridge.reject_gain = ("hdmi", 0.2)
@@ -334,9 +336,9 @@ def test_cable_endpoint_scope_reads_windows_changes_without_altering_route_gain(
     bridge = StreamBridge()
     backend = WindowsBackend(bridge)
     backend.refresh()
+    assert backend.cable_control_mode == "endpoint"
     route = backend.create_route("cable-out", "headphones")
     backend.set_route_volume(route.id, 0.6)
-    backend.set_cable_control_mode("endpoint")
     backend.set_device_volume("cable-out", 0.35)
     assert bridge.volume == 0.35 and route.volume == 0.6
     assert backend.get_device("cable-out").properties["controls"]["volume"] == 0.35

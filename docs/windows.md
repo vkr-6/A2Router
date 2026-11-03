@@ -30,7 +30,25 @@ Linux Qt tests, native matrix sample tests and Windows control/PowerShell simula
 
 ## Mixer and routing workspace
 
-Native `IAudioEndpointVolume` provides master volume/mute and `IAudioMeterInformation` provides observed peaks for physical inputs, outputs and actual cable capture/playback endpoints. Generated loopback aliases are excluded from duplicate mixer controls. Fast meter polling is serialized off the GUI thread and only runs while Audio is visible. Charts retain stable device identity, avoid interpolating across gaps and show unavailable data explicitly. Volume control does not restart source sessions.
+Native `IAudioEndpointVolume` provides master volume/mute. `IAudioMeterInformation`
+provides observed peaks for render endpoints only: capture metering is deliberately
+not activated during discovery/polling. Configured input formats come from the
+read-only endpoint property store, rather than activating `IAudioClient`. Generated
+loopback aliases are excluded from duplicate mixer controls. Polling is serialized
+off the GUI thread. Volume control does not restart source sessions.
+
+Physical microphone capture requires Settings → Privacy permission for this
+session. It starts disabled and is never restored from a saved profile. Revocation
+cancels calibration and stops physical input sessions; virtual-cable routing remains
+independent. Old native DLLs lack passive discovery; the GUI explains that a rebuild
+is required. The native privacy extension is additive to bridge ABI 2.
+
+VB-CABLE defaults to Windows playback-endpoint control; route trim remains separate.
+Enable **Windows Volume Control** in the official VB-CABLE panel for its Windows
+playback slider to affect audio. This vendor option is not changed automatically.
+Recording-endpoint sliders are not equivalent to playback gain. Endpoint readback
+verifies Windows values, not the driver's audible application of gain. See the
+[vendor manual](https://vb-audio.com/Cable/VBCABLE_ReferenceManual.pdf).
 
 The top navigation and manual synchronization workflow are documented in [the user guide](user-guide.md). Rename verification now reacquires endpoint/property-store instances; write/commit access-denied HRESULTs reach the explicit elevation flow. A rejected unchanged write does not attempt rollback. This change still requires a target-machine Windows DLL build and rename check.
 

@@ -49,6 +49,8 @@ class DeviceModel(QAbstractTableModel):
         if role == Qt.UserRole:
             return device["id"]
         if role == Qt.ToolTipRole:
+            if index.column() in (3, 4, 5) and device.get("properties", {}).get("format_source"):
+                return device["properties"]["format_source"]
             if index.column() == 6 and str(device["state"]).upper() == "SUSPENDED":
                 return (
                     "Idle audio-server endpoint; normally wakes when audio starts. Reported state: SUSPENDED."

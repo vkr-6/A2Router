@@ -33,7 +33,8 @@ class WindowsBackend(AudioBackend):
         self.active_delays = {}
         self.active_matrices = {}
         self.format_cache = {}
-        self.cable_control_mode = "routes"
+        self.cable_control_mode = "endpoint"
+        self.microphone_access = False  # Explicit, session-only permission; never restored from profiles.
         self.application_error = ""
         self._calibration_cancel = threading.Event()
         self.has_matrix_api = bridge is not None and hasattr(bridge, "ar_source_start_matrix")
@@ -85,6 +86,7 @@ class WindowsBackend(AudioBackend):
                     "ar_application_api_version": ([], ctypes.c_int),
                     "ar_application_capture_supported": ([], ctypes.c_int),
                     "ar_live_matrix_version": ([], ctypes.c_int),
+                    "ar_privacy_version": ([], ctypes.c_int),
                     "ar_source_set_matrix": (
                         [ctypes.c_wchar_p, ctypes.c_int, ctypes.c_wchar_p, ctypes.c_wchar_p],
                         ctypes.c_int,
@@ -153,6 +155,11 @@ class WindowsBackend(AudioBackend):
             and self.bridge.ar_calibration_version() == 1,
             "device_controls": self.bridge is not None and hasattr(self.bridge, "ar_set_device_volume"),
             "meters": self.bridge is not None and hasattr(self.bridge, "ar_controls"),
+            "passive_input_discovery": bool(
+                self.bridge
+                and hasattr(self.bridge, "ar_privacy_version")
+                and self.bridge.ar_privacy_version() == 1
+            ),
             "device_configuration": self.bridge is not None and hasattr(self.bridge, "ar_set_device_format"),
             "device_rename": self.bridge is not None and hasattr(self.bridge, "ar_rename_device"),
             "adjustable_latency": False,
@@ -321,8 +328,8 @@ class WindowsBackend(AudioBackend):
                 if ident in self.format_cache:
                     properties["supported_formats"] = self.format_cache[ident]
                 if properties.get("controls"):
-                    properties["endpoint_controls"] = dict(properties["controls"])
                     properties["controls"]["observed_at"] = time.monotonic()
+                    properties["endpoint_controls"] = dict(properties["controls"])
                 devices[ident] = Device(ident, name, kind, positions=positions, state="ACTIVE", **row)
                 if kind == "output":
                     monitor_id = "wasapi-loopback:" + ident
@@ -349,6 +356,10 @@ class WindowsBackend(AudioBackend):
             for device in devices.values():
                 if device.kind == "output" and device.properties.get("virtual_driver") == "VB-CABLE":
                     cable_outputs.setdefault(device.properties["feedback_group"], []).append(device.id)
+            for outputs in cable_outputs.values():
+                outputs.sort(
+                    key=lambda ident: (not devices[ident].default, devices[ident].channels != 2, ident)
+                )
             for device in devices.values():
                 group = device.properties.get("feedback_group")
                 if device.kind == "input" and not device.monitor_of and group in cable_outputs:
@@ -411,6 +422,9 @@ class WindowsBackend(AudioBackend):
             route.resource_ids = []
             if not route.enabled or not self.transport_running:
                 route.status, route.error = ("disabled" if not route.enabled else "stopped"), ""
+                continue
+            if self._physical_input(route.source_id) and not self.microphone_access:
+                route.status, route.error = "pending", "Microphone/input access is off; enable it in Settings"
                 continue
             try:
                 self._validate_route(route)
@@ -570,6 +584,8 @@ class WindowsBackend(AudioBackend):
         return self._calibration_cancel.is_set()
 
     def record_calibration(self, microphone_id, output_id, level, channel):
+        if not self.microphone_access:
+            raise BackendError("Microphone/input access is off; enable it in Settings before calibration")
         if not self.capabilities().get("calibration"):
             raise BackendError("Native calibration is unavailable")
         payload = self.bridge.ar_calibration_record(microphone_id, output_id, level, channel)
@@ -579,6 +595,30 @@ class WindowsBackend(AudioBackend):
             return json.loads(payload)
         except (ValueError, TypeError) as exc:
             raise BackendError("Invalid native recording payload") from exc
+
+    def _physical_input(self, device_id):
+        device = self.devices.get(device_id)
+        if device is None:
+            return bool(self.source_endpoints.get(device_id, (None, False))[1])
+        return bool(
+            device
+            and device.kind == "input"
+            and not device.monitor_of
+            and device.virtual is not True
+            and not device.properties.get("application_capture")
+        )
+
+    def set_microphone_access(self, enabled):
+        if type(enabled) is not bool:
+            raise BackendError("Microphone access must be a boolean")
+        if not enabled:
+            self.cancel_calibration()
+        self.microphone_access = enabled
+        if self.bridge:
+            self._apply()
+        if not enabled and any(self._physical_input(source) for source in self.active_sessions):
+            raise BackendError("Microphone capture could not be stopped; try Emergency Mute or exit A2Router")
+        return "Microphone/input access " + ("allowed for this session" if enabled else "off")
 
     def can_live_channel_map(self, route_id):
         if not self.capabilities().get("live_channel_routing"):
@@ -767,7 +807,7 @@ class WindowsBackend(AudioBackend):
         for row in json.loads(payload):
             device = self.devices.get(row["id"])
             if device:
-                device.properties["endpoint_controls"] = dict(row["controls"])
+                device.properties["endpoint_controls"] = {**row["controls"], "observed_at": time.monotonic()}
                 device.properties["controls"] = {**row["controls"], "observed_at": time.monotonic()}
         self._update_cable_controls()
 
@@ -806,6 +846,8 @@ class WindowsBackend(AudioBackend):
 
     def inspect_formats(self, device_id):
         self.get_device(device_id)
+        if self._physical_input(device_id) and not self.microphone_access:
+            raise BackendError("Enable microphone/input access in Settings before probing its formats")
         if not self.capabilities()["device_configuration"]:
             raise BackendError("Rebuild the native bridge to configure formats")
         payload = self.bridge.ar_device_formats(device_id)
@@ -846,6 +888,8 @@ class WindowsBackend(AudioBackend):
     def configure_device_format(self, device_id, config):
         self._validate_format(config)
         self.get_device(device_id)
+        if self._physical_input(device_id) and not self.microphone_access:
+            raise BackendError("Enable microphone/input access in Settings before configuring its format")
         if not self.capabilities()["device_configuration"]:
             raise BackendError("Native device configuration is unavailable")
         group = self.get_device(device_id).properties.get("feedback_group")
@@ -1014,6 +1058,10 @@ class WindowsBackend(AudioBackend):
         return {
             **super().diagnostics(),
             "telemetry": self.telemetry,
+            "microphone_access_allowed": self.microphone_access,
+            "physical_input_sessions": [
+                source for source in self.active_sessions if self._physical_input(source)
+            ],
             "application_discovery_error": self.application_error,
             "application_capture_requirement": "Windows build 20348+; copies preserve original app output",
             "native_library": str(library_path()),
@@ -1036,3 +1084,4 @@ class WindowsBackend(AudioBackend):
         self.active_delays.clear()
         self.active_matrices.clear()
         self.source_endpoints.clear()
+        self.microphone_access = False

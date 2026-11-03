@@ -170,7 +170,7 @@ retain their own terms. See [third-party notices](THIRD_PARTY_NOTICES.md).
 ## Cable volume controls
 
 In Mixer, Cable volume selects either A2Router routed playback or the Windows
-playback endpoint. These are separate gain stages; changing scope does not reset
+playback endpoint (the default). These are separate gain stages; changing scope does not reset
 or multiply either value automatically. Endpoint mode reads back Windows values
 and reflects changes made outside A2Router.
 
@@ -180,6 +180,19 @@ that the playback volume control has no effect while this option is disabled:
 [VB-CABLE reference manual, Windows Volume Control](https://vb-audio.com/Cable/VBCABLE_ReferenceManual.pdf).
 A2Router verifies the original control-panel binary before launching it and never
 runs the installer from this action. Driver options are not changed automatically.
+
+Windows physical microphone capture is **off by default on each start**. Enable
+**Settings → Privacy → Allow microphone/input capture for this session** when
+needed. Turning it off cancels calibration and stops physical-input routes without
+discarding their definitions. Updated native discovery reads input format properties
+without opening capture clients or input peak meters. Rebuild the Windows DLL to
+get this change; active virtual-cable capture can still show recording activity.
+
+New packages embed app version, source commit/dirty state, UTC build time, workflow
+run, exact dependency versions and the native DLL SHA-256. **Help → About** displays
+the build identity. Generated `build-info.json` and packaged self-test reports let
+testers associate results with a specific build. Releases remain unsigned unless
+the distributor signs them separately.
 
 Linux PipeWire 1.0+ now exposes a per-route server latency target with explicit
 permission to restart that route. This is a server buffering request, not measured

@@ -62,6 +62,7 @@ def test_fanout_input_capture_and_server_mixing_simulated():
     bridge = Bridge()
     backend = WindowsBackend(bridge)
     backend.refresh()
+    backend.set_microphone_access(True)
     assert backend.get_device("mic").kind == "input"
     assert backend.get_device("wasapi-loopback:headphones").monitor_of == "headphones"
     assert not backend.capabilities()["virtual_devices"]
@@ -97,6 +98,7 @@ def test_hotplug_and_recovery():
     bridge = Bridge()
     backend = WindowsBackend(bridge)
     backend.refresh()
+    backend.set_microphone_access(True)
     route = backend.create_route("mic", "headphones", monitoring_confirmed=True)
     bridge.missing.add("headphones")
     backend.refresh()
@@ -112,6 +114,7 @@ def test_partial_source_failure_keeps_other_sources_running():
     bridge = Bridge()
     backend = WindowsBackend(bridge)
     backend.refresh()
+    backend.set_microphone_access(True)
     good = backend.create_route("wasapi-loopback:default", "headphones")
     bridge.fail_source = "mic"
     bad = backend.create_route("mic", "headphones", monitoring_confirmed=True)
@@ -132,6 +135,7 @@ def test_readonly_refresh_does_not_create_sessions():
 def test_windows_mono_duplication_policy():
     backend = WindowsBackend(Bridge())
     backend.refresh()
+    backend.set_microphone_access(True)
     backend.devices["mic"].channels = 1
     backend.devices["mic"].positions = ("mono",)
     assert backend.create_route("mic", "headphones", monitoring_confirmed=True).status == "connected"
@@ -256,3 +260,36 @@ def test_paused_windows_transport_retains_enabled_states_after_refresh():
     controller.resume_routes()
     assert active.status == "connected" and disabled.status == "disabled"
     assert len(bridge.sessions) == 1
+
+
+def test_calibration_cannot_open_capture_without_session_permission():
+    class CalibrationBridge(Bridge):
+        recordings = 0
+
+        def ar_calibration_version(self):
+            return 1
+
+        def ar_calibration_record(self, *args):
+            self.recordings += 1
+            return b"{}"
+
+        def ar_calibration_reset(self):
+            return 1
+
+        def ar_calibration_cancel(self):
+            return 1
+
+    bridge = CalibrationBridge()
+    backend = WindowsBackend(bridge)
+    backend.refresh()
+    with pytest.raises(BackendError, match="access is off"):
+        backend.record_calibration("mic", "headphones", -36, 0)
+    assert bridge.recordings == 0 and not bridge.starts
+    backend.set_microphone_access(True)
+    assert not bridge.starts  # Permission alone does not create a capture session.
+    backend.reset_calibration()
+    assert backend.record_calibration("mic", "headphones", -36, 0) == {}
+    backend.set_microphone_access(False)
+    with pytest.raises(BackendError, match="access is off"):
+        backend.record_calibration("mic", "headphones", -36, 0)
+    assert bridge.recordings == 1

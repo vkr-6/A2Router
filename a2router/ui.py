@@ -188,13 +188,24 @@ class MainWindow(QMainWindow):
             controls = QHBoxLayout()
             controls.addWidget(QLabel("Cable volume"))
             self.cable_volume_scope = QComboBox()
-            self.cable_volume_scope.addItem("A2Router routed playback", "routes")
             self.cable_volume_scope.addItem("Windows playback endpoint", "endpoint")
+            self.cable_volume_scope.addItem("Route trim (independent of Windows)", "routes")
+            self.cable_volume_scope.setCurrentIndex(
+                self.cable_volume_scope.findData(self.backend.cable_control_mode)
+            )
             self.cable_volume_scope.currentIndexChanged.connect(self.change_cable_scope)
             controls.addWidget(self.cable_volume_scope)
-            self.button(controls, "VB-CABLE panel…", self.open_cable_panel)
+            self.cable_panel_button = self.button(controls, "VB-CABLE panel…", self.open_cable_panel)
             controls.addStretch()
             layout.addLayout(controls)
+            self.cable_volume_hint = QLabel(
+                "Windows cable audio requires “Windows Volume Control” in the VB-CABLE panel. "
+                "Windows Sound must be controlling the same CABLE Input playback endpoint."
+            )
+            self.cable_volume_hint.setObjectName("MutedText")
+            self.cable_volume_hint.setWordWrap(True)
+            self.cable_volume_hint.hide()
+            layout.addWidget(self.cable_volume_hint)
         actions = QHBoxLayout()
         layout.addLayout(actions)
         self.button(
@@ -921,6 +932,19 @@ class MainWindow(QMainWindow):
     def refresh(self, manual=False):
         self.submit(lambda: None, persist=False, background=not manual)
 
+    def change_microphone_access(self, enabled):
+        request = self._microphone_request = getattr(self, "_microphone_request", 0) + 1
+        if not enabled:
+            self.backend.microphone_access = False  # Revoke before calibration can restore managed routes.
+            self.backend.cancel_calibration()  # Lock-free cancellation even while a worker records.
+
+        def apply():
+            if request == self._microphone_request:
+                return self.backend.set_microphone_access(enabled)
+            return None
+
+        self.submit(apply, persist=False)
+
     def submit(self, operation, persist=True, background=False, refresh_backend=True):
         if self.exiting:
             return
@@ -1203,6 +1227,13 @@ class MainWindow(QMainWindow):
                     )
                 )
             present = bool(virtual_rows)
+            self.cable_panel_button.setEnabled(present)
+            self.cable_panel_button.setToolTip(
+                "Open the official panel to enable its Windows Volume Control option"
+                if present
+                else "VB-CABLE is not detected; add it in Devices → Configure if needed"
+            )
+            self.cable_volume_hint.setVisible(present and self.backend.cable_control_mode == "endpoint")
             self.vbcable_status.setText(
                 "VB-CABLE connected"
                 if present

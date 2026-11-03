@@ -78,8 +78,10 @@ def main(argv=None):
             if args.command == "gui":
                 from PySide6.QtWidgets import QApplication
 
+                from a2router.branding import prepare_windows_identity
                 from a2router.ui import MainWindow
 
+                prepare_windows_identity()
                 app = QApplication.instance() or QApplication(sys.argv[:1])
                 app.setApplicationName("A2Router")
                 window = MainWindow(controller, state_path)

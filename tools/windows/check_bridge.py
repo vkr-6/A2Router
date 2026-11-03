@@ -36,6 +36,7 @@ def main():
         "ar_calibration_version",
         "ar_application_api_version",
         "ar_live_matrix_version",
+        "ar_privacy_version",
     ):
         function = getattr(bridge, name)
         function.argtypes, function.restype = [], ctypes.c_int

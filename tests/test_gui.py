@@ -389,6 +389,9 @@ def test_shared_cable_has_one_mixer_strip_and_controls_managed_streams(app, tmp_
     window = MainWindow(Controller(backend), tmp_path / "session.json")
     try:
         wait(app, window)
+        assert backend.cable_control_mode == "endpoint"
+        window.cable_volume_scope.setCurrentIndex(window.cable_volume_scope.findData("routes"))
+        wait(app, window)
         window.navigation.setCurrentRow(1)
         assert "cable-out" in window.dashboard.cards
         assert not {"cable-in", "cable-16"} & set(window.dashboard.cards)

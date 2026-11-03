@@ -33,10 +33,12 @@ def main():
         )
     if python_license.exists():
         shutil.copy2(python_license, licenses / "Python-LICENSE.txt")
+    embedded = json.loads(Path(sys.argv[2]).read_text()) if len(sys.argv) > 2 else {}
     data = {
+        **embedded,
         "python": sys.version,
         "platform": platform.platform(),
-        "packages": versions,
+        "packages": {**embedded.get("packages", {}), **versions},
         "native_bridge_api": 2 if sys.platform == "win32" else None,
         "virtual_endpoint_driver": (
             "VB-CABLE included unchanged; installation and playback unverified"
