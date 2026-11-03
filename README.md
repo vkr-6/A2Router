@@ -8,20 +8,45 @@ audio server. Built on [vkr-6/MultiRoute](https://github.com/vkr-6/MultiRoute),
 originally [FulminataXII/MultiRoute](https://github.com/FulminataXII/MultiRoute).
 Developed with **OpenAI Codex** under the project owner's direction.
 
+## First public release — v1.0.0
+
+**[A2Router v1.0.0 — First Public Release](https://github.com/vkr-6/A2Router/releases/tag/v1.0.0)**
+is available for Windows and Linux.
+
+Tested on **Windows and Linux by Astra and the project maintainer, vkr-6**.
+Both report that the functionality they tested is working well so far. Thank you
+to Astra for testing and feedback.
+
+| Platform | Download |
+|---|---|
+| Windows x64 — portable | [Portable ZIP](https://github.com/vkr-6/A2Router/releases/download/v1.0.0/A2router-windows-x64-portable.zip) |
+| Windows x64 — installer | [Setup EXE](https://github.com/vkr-6/A2Router/releases/download/v1.0.0/a2router-windows-x64-setup.exe) |
+| Linux x86_64 — portable | [Portable tar.gz](https://github.com/vkr-6/A2Router/releases/download/v1.0.0/A2router-linux-x86_64-portable.tar.gz) |
+| Debian/Ubuntu amd64 | [.deb package](https://github.com/vkr-6/A2Router/releases/download/v1.0.0/A2router_v1.0.0_amd64.deb) |
+
+The first release includes concurrent routing, supported application capture,
+channel mapping and conversion, profiles, virtual-device management, explicit
+recording permissions and Windows-linked cable volume controls. Features vary by
+backend; Windows calibration requires a microphone and at least two physical outputs.
+Testing does not imply every device, driver or calibration setup is qualified.
+Please report issues with your OS, device details, build information and steps to reproduce.
+
 ## Interface
 
 - **Audio Routing:** select a source/destination, manage concurrent routes and open
   optional Channel Matrix or Synchronization & delay. No showcase device tables,
   Advanced Processing page or Route Monitor page.
 - **Mixer:** compact observed level meters, endpoint controls and one logical
-  VB-CABLE strip. Cable volume/mute controls A2Router's native routed streams;
-  the input meter measures the incoming cable signal before that gain.
+  VB-CABLE strip. Windows-linked mode synchronizes the cable playback endpoint's
+  Windows volume/mute with A2Router-managed streams; independent route trim and
+  driver-managed modes are also available. The input meter precedes routed gain.
 - **Devices:** physical/virtual inventory, shared-cable status and configuration
   together. Select an endpoint, scan exact supported formats, and apply supported
   channels/bit depth/sample rate. Windows/vendor names remain unchanged.
 - **Calibration:** microphone-assisted sequential chirps, repeated-pass correlation,
   confidence/spread, cancellation and reviewed compensation. Measurement does not
-  automatically apply delays. Native Windows playback/capture needs hardware testing.
+  automatically apply delays. Windows-only; requires a microphone and at least two
+  physical outputs. Calibration accuracy depends on the measurement setup.
 - **Settings → Appearance:** the single place to select the theme and interface density.
   The default Orange theme uses charcoal panels, orange accents and original outline icons;
   White, Dark, Lime, Blue, Violet and system-following alternatives remain available.
@@ -43,7 +68,7 @@ The workflow remains **manual-only**, with independent choices for:
 |---|---|
 | Windows portable | `a2router-windows-x64.zip`, portable app folder |
 | Windows setup | `a2router-windows-x64-setup.exe`, SHA-256 checksum |
-| Linux | `a2router-linux-x86_64.tar.gz`, `a2router_0.1.0_amd64.deb`, checksums |
+| Linux | `a2router-linux-x86_64.tar.gz`, versioned `.deb`, checksums |
 
 Push the source, then **Actions → A2Router build → Run workflow**. Choose the targets.
 Windows and Linux build separately. Download the artifacts after the selected jobs
@@ -87,7 +112,7 @@ The hosted workflow can provision its own build-runner compiler.
 
 Tarball: extract and run `./a2router`; Python/Qt/NumPy are bundled. PipeWire,
 pipewire-pulse, pactl and desktop Qt/XCB libraries remain system dependencies.
-Debian/Ubuntu: `sudo apt install ./a2router_0.1.0_amd64.deb` installs the bundle and
+Debian/Ubuntu: `sudo apt install ./A2router_v1.0.0_amd64.deb` installs the release bundle and
 desktop launcher with declared dependencies. No driver/application service is added.
 CI targets Ubuntu 22.04+ compatible glibc systems. Locally generated artifacts reflect
 the local build host; this session's package was built on Ubuntu 24.04/glibc 2.39.
@@ -146,9 +171,18 @@ ctest --test-dir build/native --output-on-failure
 
 Windows multi-config builds use `--config Release` and CTest `-C Release`.
 Opt-in private Linux graph tests: `dbus-run-session -- python tests/run_private_pipewire.py`.
-No Windows compiler/audio hardware validation was performed in this session. Offline
-algorithm, control simulation and offscreen GUI tests do not establish that the new
-Windows DLL, setup or acoustic path works on a real target. See [verification](docs/upgrade-report.md).
+The project maintainer and Astra report successful testing on **both Windows and
+Linux**. Separately, the latest local developer suite completed with **210 tests
+passed and 23 skipped**, and the portable native CTest passed **1/1**. These automated
+results include simulated backends and offline algorithm tests; they are not a
+substitute for real audio-device testing.
+
+The developer's local verification ran on Linux; it did not compile or exercise the
+updated Windows DLL on hardware. The maintainer/Astra platform testing is separate
+evidence. Exhaustive driver compatibility, measured acoustic accuracy and long-duration
+drift are not certified. Earlier reports retain the scope and limitations of their
+own runs: [upgrade verification](docs/upgrade-report.md) and
+[Windows audit corrections](docs/windows-audit-corrections.md).
 
 ## Credits and license
 
@@ -161,6 +195,7 @@ Windows DLL, setup or acoustic path works on a real target. See [verification](d
 - **OpenAI Codex**: application development, integration, UI, documentation and build
   automation under the owner's direction. This credit does not replace upstream
   authorship or imply hardware verification.
+- **Astra and vkr-6**: Windows and Linux release testing, issue reports and feedback.
 
 Original A2Router contributions use the [MIT license](LICENSE), with explicit
 [exclusions](LICENSING.md). The imported MultiRoute engine has no license in this
